@@ -1,0 +1,460 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== AUTHENTICATION & AUTHORIZATION MODELS ====================
+
+// User model for authentication and user management
+model User {
+  id                String         @id @default(cuid())
+  email             String?        @unique
+  phone             String?        @unique
+  username          String?        @unique
+  password          String?        // Hashed password
+  firstName         String?
+  lastName          String?
+  isActive          Boolean        @default(true)
+  isEmailVerified   Boolean        @default(false)
+  isPhoneVerified   Boolean        @default(false)
+  lastLoginAt       DateTime?
+  profileImageUrl   String?
+  preferredLanguage String?        @default("en")
+  
+  // Authentication related fields
+  refreshTokens     RefreshToken[]
+  sessions          Session[]
+  otps              OTP[]
+  
+  // Authorization related fields
+  userRoles         UserRole[]
+  
+  // Platform specific fields
+  platform          PlatformType?  // Last used platform
+  deviceInfo        Json?          // Device information
+  
+  // Audit fields
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?      // Soft delete
+  
+  // Relations to other models
+  events            Event[]        @relation("UserEvents")
+  auditLogs         AuditLog[]     @relation("UserAuditLogs")
+  
+  @@index([email])
+  @@index([phone])
+  @@index([username])
+  @@index([isActive])
+}
+
+// Session model for managing user sessions
+model Session {
+  id            String       @id @default(cuid())
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  token         String       @unique
+  expiresAt     DateTime
+  ipAddress     String?
+  userAgent     String?
+  deviceId      String?
+  platform      PlatformType
+  isValid       Boolean      @default(true)
+  lastActiveAt  DateTime     @default(now())
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@index([isValid])
+}
+
+// Refresh token model for JWT refresh tokens
+model RefreshToken {
+  id        String       @id @default(cuid())
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  token     String       @unique
+  expiresAt DateTime
+  isRevoked Boolean      @default(false)
+  platform  PlatformType
+  deviceId  String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@index([isRevoked])
+}
+
+// OTP model for one-time passwords (SMS/Email verification)
+model OTP {
+  id          String      @id @default(cuid())
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  code        String
+  type        OTPType
+  expiresAt   DateTime
+  isUsed      Boolean     @default(false)
+  attempts    Int         @default(0)
+  maxAttempts Int         @default(3)
+  createdAt   DateTime    @default(now())
+  
+  @@index([userId])
+  @@index([code])
+  @@index([expiresAt])
+  @@index([isUsed])
+}
+
+// Dynamic role model
+model Role {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  description String?
+  isSystem    Boolean    @default(false)  // System roles cannot be modified
+  userRoles   UserRole[]
+  rolePerms   RolePermission[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  @@index([name])
+}
+
+// User-Role relationship (many-to-many)
+model UserRole {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+// Permission model for granular access control
+model Permission {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String?
+  resource    String           // The resource this permission applies to (e.g., "users", "products")
+  action      String           // The action allowed (e.g., "create", "read", "update", "delete")
+  conditions  Json?            // Optional conditions for when this permission applies
+  rolePerms   RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  @@unique([resource, action])
+  @@index([resource])
+  @@index([action])
+}
+
+// Role-Permission relationship (many-to-many)
+model RolePermission {
+  id           String     @id @default(cuid())
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId       String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  permissionId String
+  createdAt    DateTime   @default(now())
+  
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+// Audit log for authentication and authorization events
+model AuditLog {
+  id          String    @id @default(cuid())
+  user        User?     @relation("UserAuditLogs", fields: [userId], references: [id])
+  userId      String?
+  action      String    // The action performed (e.g., "login", "logout", "permission_change")
+  resource    String?   // The resource affected
+  resourceId  String?   // The ID of the resource affected
+  oldValue    Json?     // Previous state (if applicable)
+  newValue    Json?     // New state (if applicable)
+  ipAddress   String?
+  userAgent   String?
+  platform    PlatformType?
+  metadata    Json?     // Additional metadata
+  createdAt   DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([action])
+  @@index([resource])
+  @@index([createdAt])
+}
+
+// ==================== ENUMS FOR AUTH SYSTEM ====================
+
+enum OTPType {
+  EMAIL_VERIFICATION
+  PHONE_VERIFICATION
+  PASSWORD_RESET
+  TWO_FACTOR_AUTH
+}
+
+// ==================== EXISTING CONFIGURATION MODELS ====================
+
+// Configuration Key represents a configurable setting in the system
+model ConfigKey {
+  id             String          @id @default(cuid())
+  key            String          @unique
+  description    String?
+  category       ConfigCategory  @relation(fields: [categoryId], references: [id])
+  categoryId     String
+  isSecret       Boolean         @default(false)
+  defaultValue   String? // Default value as JSON string
+  valueType      ValueType       @default(STRING)
+  values         ConfigValue[]
+  serviceConfigs ServiceConfig[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([categoryId])
+}
+
+// Categories for organizing configuration keys
+model ConfigCategory {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  description String?
+  configKeys  ConfigKey[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+// Configuration values with environment and platform support
+model ConfigValue {
+  id          String        @id @default(cuid())
+  configKey   ConfigKey     @relation(fields: [configKeyId], references: [id])
+  configKeyId String
+  value       String // Stored as JSON string for complex values
+  environment String? // null means applies to all environments
+  platform    PlatformType? // null means applies to all platforms
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  createdBy   String?
+  auditLogs   ConfigAudit[]
+
+  @@unique([configKeyId, environment, platform])
+  @@index([configKeyId])
+  @@index([environment])
+  @@index([platform])
+}
+
+// Service definitions for dynamic service management
+model Service {
+  id             String          @id @default(cuid())
+  name           String          @unique
+  description    String?
+  serviceType    ServiceType     @default(CUSTOM)
+  isEnabled      Boolean         @default(true)
+  healthEndpoint String?
+  serviceConfigs ServiceConfig[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+// Junction table for services and their required configs
+model ServiceConfig {
+  id          String    @id @default(cuid())
+  service     Service   @relation(fields: [serviceId], references: [id])
+  serviceId   String
+  configKey   ConfigKey @relation(fields: [configKeyId], references: [id])
+  configKeyId String
+  isRequired  Boolean   @default(false)
+
+  @@unique([serviceId, configKeyId])
+  @@index([serviceId])
+  @@index([configKeyId])
+}
+
+// Network configuration for CORS, rate limiting, etc.
+model NetworkConfig {
+  id          String        @id @default(cuid())
+  name        String
+  config      String // JSON configuration
+  isEnabled   Boolean       @default(true)
+  environment String? // null means applies to all environments
+  platform    PlatformType? // null means applies to all platforms
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([name, environment, platform])
+  @@index([name])
+  @@index([environment])
+  @@index([platform])
+}
+
+// Rate limiting configuration
+model RateLimitRule {
+  id          String        @id @default(cuid())
+  path        String // API path pattern
+  method      String? // HTTP method, null means all methods
+  limit       Int // Number of requests
+  windowSec   Int // Time window in seconds
+  isEnabled   Boolean       @default(true)
+  environment String? // null means applies to all environments
+  platform    PlatformType? // null means applies to all platforms
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([path, method, environment, platform])
+  @@index([path, method])
+  @@index([environment])
+  @@index([platform])
+}
+
+// Audit trail for configuration changes
+model ConfigAudit {
+  id            String        @id @default(cuid())
+  configValue   ConfigValue   @relation(fields: [configValueId], references: [id])
+  configValueId String
+  oldValue      String?
+  newValue      String?
+  changedBy     String
+  environment   String?
+  platform      PlatformType?
+  metadata      Json? // Additional metadata about the change
+  createdAt     DateTime      @default(now())
+
+  @@index([configValueId])
+  @@index([environment])
+  @@index([platform])
+  @@index([createdAt])
+}
+
+// Feature flags for toggling features
+model FeatureFlag {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  isEnabled   Boolean       @default(false)
+  environment String? // null means applies to all environments
+  platform    PlatformType? // null means applies to all platforms
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([name, environment, platform])
+  @@index([environment])
+  @@index([platform])
+}
+
+// Analytics Models
+model Event {
+  id         String         @id @default(cuid())
+  type       String
+  source     String
+  timestamp  DateTime       @default(now())
+  userId     String?
+  user       User?          @relation("UserEvents", fields: [userId], references: [id])
+  sessionId  String?
+  properties Json?
+  metadata   EventMetadata?
+  createdAt  DateTime       @default(now())
+  
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model EventMetadata {
+  id         String   @id @default(cuid())
+  eventId    String   @unique
+  event      Event    @relation(fields: [eventId], references: [id])
+  ip         String?
+  userAgent  String?
+  referer    String?
+  path       String?
+  method     String?
+  statusCode Int?
+  duration   Int? // in milliseconds
+  createdAt  DateTime @default(now())
+}
+
+model PerformanceMetric {
+  id        String   @id @default(cuid())
+  name      String
+  value     Float
+  unit      String
+  timestamp DateTime @default(now())
+  tags      Json? // For storing key-value pairs for filtering
+  serviceId String?
+  createdAt DateTime @default(now())
+}
+
+model ErrorLog {
+  id        String   @id @default(cuid())
+  level     String   @default("error")
+  message   String
+  stack     String?
+  context   Json?
+  timestamp DateTime @default(now())
+  serviceId String?
+  userId    String?
+  createdAt DateTime @default(now())
+}
+
+model Dashboard {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  description String?
+  layout      Json
+  isPublic    Boolean           @default(false)
+  widgets     DashboardWidget[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+}
+
+model DashboardWidget {
+  id          String    @id @default(cuid())
+  name        String
+  type        String // chart, metric, table, etc.
+  config      Json
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id])
+  dashboardId String
+  position    Json // {x, y, w, h}
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+enum ValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  JSON
+  ARRAY
+}
+
+enum ServiceType {
+  DATABASE
+  ANALYTICS
+  CACHE
+  EMAIL
+  SMS
+  CUSTOM
+}
+
+enum PlatformType {
+  WEB
+  MOBILE_ANDROID
+  MOBILE_IOS
+  DESKTOP_WINDOWS
+  DESKTOP_MAC
+  DESKTOP_LINUX
+  ALL
+}
+
