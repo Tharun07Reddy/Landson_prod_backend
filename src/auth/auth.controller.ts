@@ -50,13 +50,28 @@ class RefreshTokenDto {
   platform: PlatformType;
 }
 
+class ForgotPasswordDto {
+  emailOrPhone: string;
+  preferredMethod?: 'email' | 'sms';
+}
+
+class ResetPasswordDto {
+  userId: string;
+  code: string;
+  newPassword: string;
+}
+
 // Define response types to match AuthService
 interface AuthResponse {
   accessToken: string;
   refreshToken?: string;
   expiresIn: number;
-  user: Partial<User>;
+  user: Partial<User> & {
+    needsVerification?: boolean;
+    verificationType?: 'email' | 'phone';
+  };
   sessionId?: string;
+  verificationSent?: boolean;
 }
 
 interface TokenResponse {
@@ -85,13 +100,20 @@ export class AuthController {
     const { platform, deviceId } = loginDto;
     const ipAddress = req.ip;
     
-    return this.authService.login(
+    const response = await this.authService.login(
       req.user,
       platform,
       deviceId,
       ipAddress,
       userAgent,
     );
+    
+    // If the response indicates verification is needed
+    if (response.verificationSent) {
+      return response;
+    }
+    
+    return response;
   }
 
   @Post('register')
@@ -156,13 +178,6 @@ export class AuthController {
     };
   }
 
-  @Get('profile')
-  @UseGuards(JwtAuthGuard)
-  @RequirePermissions({ resource: 'users', action: 'read' })
-  getProfile(@Req() req: Request): any {
-    return req.user;
-  }
-
   @Post('resend-otp/:userId')
   @Public()
   async resendOtp(
@@ -176,6 +191,40 @@ export class AuthController {
       success: true,
       expiresAt: otp.expiresAt,
       message: `Verification code sent successfully`,
+    };
+  }
+
+  @Post('forgot-password')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(
+    @Body() forgotPasswordDto: ForgotPasswordDto,
+  ): Promise<{ success: boolean; userId: string; message: string; method: string }> {
+    const { emailOrPhone, preferredMethod } = forgotPasswordDto;
+    
+    const result = await this.authService.initiatePasswordReset(emailOrPhone, preferredMethod);
+    
+    return {
+      success: true,
+      userId: result.userId,
+      message: `Password reset code sent successfully via ${result.method}`,
+      method: result.method
+    };
+  }
+
+  @Post('reset-password')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(
+    @Body() resetPasswordDto: ResetPasswordDto,
+  ): Promise<{ success: boolean; message: string }> {
+    const { userId, code, newPassword } = resetPasswordDto;
+    
+    const success = await this.authService.resetPassword(userId, code, newPassword);
+    
+    return {
+      success,
+      message: success ? 'Password reset successfully' : 'Failed to reset password'
     };
   }
 } 

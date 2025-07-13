@@ -11,6 +11,9 @@ import { SmsModule } from './sms/sms.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { FeatureModule } from './feature/feature.module';
 import { AuthModule } from './auth/auth.module';
+import { UserModule } from './user/user.module';
+import { CategoryModule } from './category/category.module';
+import { SupportModule } from './support/support.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionGuard } from './auth/guards/permission.guard';
 
@@ -28,6 +31,9 @@ import { PermissionGuard } from './auth/guards/permission.guard';
       platformSpecific: true,
       sessionEnabled: true,
     }),
+    UserModule,
+    CategoryModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [

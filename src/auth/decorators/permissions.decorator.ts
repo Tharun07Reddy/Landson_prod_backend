@@ -17,6 +17,11 @@ export const PERMISSIONS_KEY = 'permissions';
  *   { resource: 'users', action: 'read' },
  *   { resource: 'users', action: 'update' }
  * )
+ * 
+ * @example
+ * // The 'manage' action automatically grants all permissions for a resource
+ * // A user with 'users:manage' permission will have access to all user operations
+ * @RequirePermissions({ resource: 'users', action: 'update' })
  */
 export const RequirePermissions = (...permissions: Array<{ resource: string; action: string }>) =>
   SetMetadata(PERMISSIONS_KEY, permissions); 

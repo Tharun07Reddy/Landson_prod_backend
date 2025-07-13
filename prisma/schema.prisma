@@ -49,6 +49,11 @@ model User {
   events            Event[]        @relation("UserEvents")
   auditLogs         AuditLog[]     @relation("UserAuditLogs")
   
+  // Customer support relations
+  supportTickets    SupportTicket[] @relation("UserTickets")
+  supportResponses  TicketResponse[] @relation("UserResponses")
+  supportAgentFor   SupportTicket[] @relation("AssignedAgent")
+  
   @@index([email])
   @@index([phone])
   @@index([username])
@@ -431,6 +436,273 @@ model DashboardWidget {
   updatedAt   DateTime  @updatedAt
 }
 
+// ==================== PRODUCT CATEGORY MODELS ====================
+
+// Category model for product organization
+model Category {
+  id            String      @id @default(cuid())
+  name          String
+  slug          String      @unique
+  description   String?
+  parentId      String?
+  parent        Category?   @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children      Category[]  @relation("CategoryHierarchy")
+  image         String?
+  isActive      Boolean     @default(true)
+  sortOrder     Int         @default(0)
+  metaTitle     String?
+  metaDescription String?
+  attributes    CategoryAttribute[]
+  products      ProductCategory[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  @@index([parentId])
+  @@index([isActive])
+  @@index([sortOrder])
+}
+
+// Category attributes for dynamic fields
+model CategoryAttribute {
+  id          String    @id @default(cuid())
+  categoryId  String
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name        String
+  type        AttributeType
+  isRequired  Boolean   @default(false)
+  options     String[]  // For dropdown/multiselect types
+  defaultValue String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@unique([categoryId, name])
+  @@index([categoryId])
+}
+
+// Junction table for products and categories
+model ProductCategory {
+  id          String    @id @default(cuid())
+  productId   String
+  categoryId  String
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  isPrimary   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  
+  @@unique([productId, categoryId])
+  @@index([productId])
+  @@index([categoryId])
+}
+
+// Category view analytics
+model CategoryView {
+  id          String    @id @default(cuid())
+  categoryId  String
+  userId      String?
+  sessionId   String?
+  deviceInfo  Json?
+  referer     String?
+  timestamp   DateTime  @default(now())
+  
+  @@index([categoryId])
+  @@index([userId])
+  @@index([timestamp])
+}
+
+// ==================== CUSTOMER SUPPORT MODELS ====================
+
+// Support ticket model for customer inquiries and issues
+model SupportTicket {
+  id            String           @id @default(cuid())
+  reference     String           @unique // Ticket reference number (e.g., TKT-12345)
+  subject       String
+  description   String
+  user          User             @relation("UserTickets", fields: [userId], references: [id])
+  userId        String
+  assignedTo    User?            @relation("AssignedAgent", fields: [assignedToId], references: [id])
+  assignedToId  String?
+  status        TicketStatus     @default(OPEN)
+  priority      TicketPriority   @default(MEDIUM)
+  category      TicketCategory   @relation(fields: [categoryId], references: [id])
+  categoryId    String
+  responses     TicketResponse[]
+  attachments   TicketAttachment[]
+  tags          String[]
+  metadata      Json?            // Additional metadata (e.g., browser info, OS)
+  closedAt      DateTime?
+  reopenedAt    DateTime?
+  dueAt         DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  
+  @@index([userId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+  @@index([categoryId])
+  @@index([createdAt])
+}
+
+// Support ticket categories
+model TicketCategory {
+  id          String          @id @default(cuid())
+  name        String          @unique
+  description String?
+  tickets     SupportTicket[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+// Responses to support tickets
+model TicketResponse {
+  id          String        @id @default(cuid())
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticketId    String
+  user        User          @relation("UserResponses", fields: [userId], references: [id])
+  userId      String
+  content     String
+  isInternal  Boolean       @default(false) // Whether this response is visible to the customer
+  attachments TicketAttachment[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  @@index([ticketId])
+  @@index([userId])
+  @@index([isInternal])
+}
+
+// Attachments for tickets and responses
+model TicketAttachment {
+  id              String          @id @default(cuid())
+  filename        String
+  originalName    String
+  mimeType        String
+  size            Int             // File size in bytes
+  path            String          // Storage path
+  ticket          SupportTicket?  @relation(fields: [ticketId], references: [id])
+  ticketId        String?
+  response        TicketResponse? @relation(fields: [responseId], references: [id])
+  responseId      String?
+  createdAt       DateTime        @default(now())
+  
+  @@index([ticketId])
+  @@index([responseId])
+}
+
+// Knowledge base articles for self-service support
+model KnowledgeArticle {
+  id            String      @id @default(cuid())
+  title         String
+  slug          String      @unique
+  content       String
+  excerpt       String?
+  category      KnowledgeCategory @relation(fields: [categoryId], references: [id])
+  categoryId    String
+  tags          String[]
+  isPublished   Boolean     @default(false)
+  viewCount     Int         @default(0)
+  helpfulCount  Int         @default(0)
+  unhelpfulCount Int        @default(0)
+  relatedArticles KnowledgeArticle[] @relation("RelatedArticles")
+  relatedToArticles KnowledgeArticle[] @relation("RelatedArticles")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  publishedAt   DateTime?
+  
+  @@index([categoryId])
+  @@index([isPublished])
+  @@index([viewCount])
+}
+
+// Knowledge base categories
+model KnowledgeCategory {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  description String?
+  articles    KnowledgeArticle[]
+  parentId    String?
+  parent      KnowledgeCategory? @relation("KnowledgeCategoryHierarchy", fields: [parentId], references: [id])
+  children    KnowledgeCategory[] @relation("KnowledgeCategoryHierarchy")
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  
+  @@index([parentId])
+}
+
+// Customer satisfaction survey
+model SatisfactionSurvey {
+  id          String    @id @default(cuid())
+  ticketId    String    @unique
+  rating      Int       // 1-5 star rating
+  feedback    String?   // Customer feedback
+  createdAt   DateTime  @default(now())
+  
+  @@index([rating])
+}
+
+// Chat sessions for live support
+model ChatSession {
+  id          String    @id @default(cuid())
+  userId      String?   // Optional, for authenticated users
+  agentId     String?   // Support agent handling the chat
+  sessionKey  String    @unique // Unique identifier for the chat session
+  status      ChatStatus @default(ACTIVE)
+  messages    ChatMessage[]
+  metadata    Json?     // Additional metadata (e.g., browser info, page URL)
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  
+  @@index([userId])
+  @@index([agentId])
+  @@index([status])
+}
+
+// Messages within a chat session
+model ChatMessage {
+  id            String      @id @default(cuid())
+  chatSession   ChatSession @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  chatSessionId String
+  senderId      String?     // User ID or agent ID
+  senderType    SenderType  // USER or AGENT or SYSTEM
+  content       String
+  isRead        Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  
+  @@index([chatSessionId])
+  @@index([senderId])
+  @@index([isRead])
+}
+
+// Support team availability schedule
+model AgentSchedule {
+  id        String    @id @default(cuid())
+  agentId   String
+  dayOfWeek Int       // 0-6 (Sunday-Saturday)
+  startTime String    // HH:MM format
+  endTime   String    // HH:MM format
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  
+  @@unique([agentId, dayOfWeek])
+  @@index([agentId])
+  @@index([dayOfWeek])
+  @@index([isActive])
+}
+
+// ==================== ENUMS ====================
+
+enum AttributeType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  DATE
+  DROPDOWN
+  MULTISELECT
+  COLOR
+  IMAGE
+}
+
 enum ValueType {
   STRING
   NUMBER
@@ -456,5 +728,34 @@ enum PlatformType {
   DESKTOP_MAC
   DESKTOP_LINUX
   ALL
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_CUSTOMER
+  WAITING_ON_THIRD_PARTY
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ChatStatus {
+  ACTIVE
+  WAITING
+  TRANSFERRED
+  CLOSED
+}
+
+enum SenderType {
+  USER
+  AGENT
+  SYSTEM
 }
 

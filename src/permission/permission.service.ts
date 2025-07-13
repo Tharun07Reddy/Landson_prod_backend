@@ -1,13 +1,17 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Permission } from '@prisma/client';
+import { CacheService } from '../cache/cache.service';
 
 @Injectable()
 export class PermissionService {
   private readonly logger = new Logger(PermissionService.name);
   private permissionCache: Map<string, boolean> = new Map();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
+  ) {}
 
   /**
    * Check if a user has a specific permission
@@ -47,10 +51,17 @@ export class PermissionService {
 
       // Check if user has the permission through any of their roles
       const hasPermission = user.userRoles.some(userRole => 
-        userRole.role.rolePerms.some(rolePerm => 
-          rolePerm.permission.resource === resource && 
-          rolePerm.permission.action === action
-        )
+        userRole.role.rolePerms.some(rolePerm => {
+          const permission = rolePerm.permission;
+          
+          // Check for exact permission match
+          const exactMatch = permission.resource === resource && permission.action === action;
+          
+          // Check for manage permission (which grants access to all actions on the resource)
+          const manageMatch = permission.resource === resource && permission.action === 'manage';
+          
+          return exactMatch || manageMatch;
+        })
       );
 
       // Cache the result for 5 minutes
@@ -231,6 +242,38 @@ export class PermissionService {
       this.logger.error(`Error removing permission from role: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Update user permissions in cache
+   */
+  async updateUserPermissionsCache(userId: string): Promise<boolean> {
+    try {
+      // Get fresh permissions from database
+      const permissions = await this.getUserPermissions(userId);
+      
+      // Update cache
+      const cacheKey = `user:${userId}:permissions`;
+      await this.cacheService.set(cacheKey, permissions);
+      
+      // Also clear the local permission check cache
+      this.clearUserPermissionCache(userId);
+      
+      return true;
+    } catch (error) {
+      this.logger.error(`Error updating user permissions cache: ${error.message}`, error.stack);
+      return false;
+    }
+  }
+
+  /**
+   * Clear the permission cache for a specific user
+   */
+  private clearUserPermissionCache(userId: string): void {
+    // Clear all cache entries for this user
+    Array.from(this.permissionCache.keys())
+      .filter(key => key.startsWith(`${userId}:`))
+      .forEach(key => this.permissionCache.delete(key));
   }
 
   /**

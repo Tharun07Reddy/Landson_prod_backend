@@ -15,8 +15,12 @@ interface LoginResponse {
   accessToken: string;
   refreshToken?: string;
   expiresIn: number;
-  user: Partial<User>;
+  user: Partial<User> & {
+    needsVerification?: boolean;
+    verificationType?: 'email' | 'phone';
+  };
   sessionId?: string;
+  verificationSent?: boolean;
 }
 
 interface TokenPayload {
@@ -87,6 +91,45 @@ export class AuthService {
    * Login with username/email and password
    */
   async login(user: any, platform: PlatformType, deviceId?: string, ipAddress?: string, userAgent?: string): Promise<LoginResponse> {
+    // Check if user email/phone is verified
+    if (user.email && !user.isEmailVerified) {
+      // Generate OTP for email verification
+      const otp = await this.otpService.generateOTP(user.id, OTPType.EMAIL_VERIFICATION);
+      
+      // Return a special response indicating verification needed
+      return {
+        accessToken: '',
+        expiresIn: 0,
+        user: {
+          id: user.id,
+          email: user.email,
+          isEmailVerified: false,
+          needsVerification: true,
+          verificationType: 'email'
+        },
+        verificationSent: true
+      };
+    }
+    
+    if (user.phone && !user.isPhoneVerified) {
+      // Generate OTP for phone verification
+      const otp = await this.otpService.generateOTP(user.id, OTPType.PHONE_VERIFICATION);
+      
+      // Return a special response indicating verification needed
+      return {
+        accessToken: '',
+        expiresIn: 0,
+        user: {
+          id: user.id,
+          phone: user.phone,
+          isPhoneVerified: false,
+          needsVerification: true,
+          verificationType: 'phone'
+        },
+        verificationSent: true
+      };
+    }
+
     // Get platform-specific settings
     const platformKey = this.getPlatformKey(platform);
     const platformConfig = this.platformStrategies[platformKey];
@@ -341,6 +384,112 @@ export class AuthService {
    */
   async hasPermission(userId: string, resource: string, action: string): Promise<boolean> {
     return this.permissionService.userHasPermission(userId, resource, action);
+  }
+
+  /**
+   * Initiate password reset process
+   * @param emailOrPhone Email or phone to identify the user
+   * @param preferredMethod Preferred method for receiving the reset code
+   */
+  async initiatePasswordReset(
+    emailOrPhone: string,
+    preferredMethod?: 'email' | 'sms'
+  ): Promise<{ userId: string; method: string }> {
+    // Check if input is email or phone
+    const isEmail = emailOrPhone.includes('@');
+    
+    // Find the user
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: isEmail ? emailOrPhone : undefined },
+          { phone: !isEmail ? emailOrPhone : undefined },
+        ],
+        isActive: true,
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    // Determine the method to send OTP
+    let method: string;
+    
+    if (preferredMethod === 'email' && user.email) {
+      // User prefers email and has an email
+      method = 'email';
+    } else if (preferredMethod === 'sms' && user.phone) {
+      // User prefers SMS and has a phone
+      method = 'sms';
+    } else if (user.email) {
+      // Default to email if available
+      method = 'email';
+    } else if (user.phone) {
+      // Fall back to SMS if no email
+      method = 'sms';
+    } else {
+      throw new BadRequestException('No contact method available for this user');
+    }
+
+    // Generate and send the OTP
+    await this.otpService.generateOTP(user.id, OTPType.PASSWORD_RESET);
+
+    // Log the password reset request
+    this.logAuthEvent(user.id, 'password_reset_request', user.platform || PlatformType.WEB, {
+      method,
+    });
+
+    return {
+      userId: user.id,
+      method,
+    };
+  }
+
+  /**
+   * Reset user password with OTP verification
+   * @param userId User ID
+   * @param code OTP code
+   * @param newPassword New password
+   */
+  async resetPassword(userId: string, code: string, newPassword: string): Promise<boolean> {
+    // Verify the OTP first
+    const isValidOtp = await this.otpService.verifyOTP(userId, code, OTPType.PASSWORD_RESET);
+    
+    if (!isValidOtp) {
+      throw new BadRequestException('Invalid or expired verification code');
+    }
+    
+    // Get the user
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+    
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    // Update the password
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        password: hashedPassword,
+      },
+    });
+    
+    // Invalidate all refresh tokens for this user for security
+    await this.refreshTokenService.revokeAllUserRefreshTokens(userId);
+    
+    // Invalidate all sessions for this user
+    await this.sessionService.invalidateAllUserSessions(userId);
+    
+    // Log the password reset
+    this.logAuthEvent(userId, 'password_reset_success', user.platform || PlatformType.WEB, {});
+    
+    return true;
   }
 
   /**

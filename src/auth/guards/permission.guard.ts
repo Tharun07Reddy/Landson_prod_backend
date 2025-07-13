@@ -2,6 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, ForbiddenException, Logger }
 import { Reflector } from '@nestjs/core';
 import { PermissionService } from '../../permission/permission.service';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -13,6 +14,17 @@ export class PermissionGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Check if route is marked as public
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_KEY,
+      [context.getHandler(), context.getClass()]
+    );
+
+    // If route is public, allow access
+    if (isPublic) {
+      return true;
+    }
+    
     // Get required permissions from metadata
     const requiredPermissions = this.reflector.getAllAndOverride<
       Array<{ resource: string; action: string }>
@@ -32,15 +44,23 @@ export class PermissionGuard implements CanActivate {
     }
 
     try {
+      // Extract the user ID from the JWT payload (could be in user.id or user.sub)
+      const userId = user.id || user.sub;
+      
+      if (!userId) {
+        this.logger.error('User ID not found in token payload');
+        throw new ForbiddenException('Invalid user authentication');
+      }
+
       // Check if the user has all required permissions
       const hasPermission = await this.permissionService.userHasAllPermissions(
-        user.id,
+        userId,
         requiredPermissions,
       );
 
       if (!hasPermission) {
         this.logger.warn(
-          `User ${user.id} attempted to access a resource without the required permissions: ${JSON.stringify(
+          `User ${userId} attempted to access a resource without the required permissions: ${JSON.stringify(
             requiredPermissions,
           )}`,
         );

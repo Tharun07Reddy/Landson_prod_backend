@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SmsService } from '../../sms/sms.service';
 import { EmailService } from '../../email/email.service';
+import { CacheService } from '../../cache/cache.service';
 import { OTPType } from '@prisma/client';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class OtpService {
     private readonly configService: ConfigService,
     private readonly smsService: SmsService,
     private readonly emailService: EmailService,
+    private readonly cacheService: CacheService,
   ) {}
 
   /**
@@ -36,6 +38,32 @@ export class OtpService {
 
     if (type === OTPType.PHONE_VERIFICATION && !user.phone) {
       throw new BadRequestException('User does not have a phone number');
+    }
+
+    // Check if there's an active OTP in cache
+    const cacheKey = `otp:${userId}:${type}`;
+    const cachedOtp = await this.cacheService.get<{ code: string; expiresAt: string }>(cacheKey);
+    
+    if (cachedOtp) {
+      // If OTP exists in cache, return it instead of generating a new one
+      this.logger.log(`Using cached OTP for user ${userId} and type ${type}`);
+      
+      // Send the OTP via the appropriate channel
+      try {
+        const expiryMinutes = this.getOTPExpiryMinutes(type);
+        if (type === OTPType.EMAIL_VERIFICATION || type === OTPType.PASSWORD_RESET) {
+          await this.sendEmailOTP(user.email!, cachedOtp.code, type, expiryMinutes);
+        } else if (type === OTPType.PHONE_VERIFICATION || type === OTPType.TWO_FACTOR_AUTH) {
+          await this.sendSmsOTP(user.phone!, cachedOtp.code, type, expiryMinutes);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to send cached OTP: ${error.message}`, error.stack);
+      }
+      
+      return {
+        code: cachedOtp.code,
+        expiresAt: new Date(cachedOtp.expiresAt),
+      };
     }
 
     // Invalidate any existing OTPs of the same type
@@ -67,6 +95,13 @@ export class OtpService {
         maxAttempts: this.getMaxAttempts(type),
       },
     });
+
+    // Store OTP in cache for 5 minutes to prevent regeneration
+    await this.cacheService.set(
+      cacheKey,
+      { code, expiresAt: expiresAt.toISOString() },
+      5 * 60 // 5 minutes in seconds
+    );
 
     // Send the OTP via the appropriate channel
     try {
@@ -134,6 +169,10 @@ export class OtpService {
             isUsed: true,
           },
         });
+        
+        // Remove from cache
+        const cacheKey = `otp:${userId}:${type}`;
+        await this.cacheService.delete(cacheKey);
       }
       throw new BadRequestException('Invalid verification code');
     }
@@ -145,6 +184,10 @@ export class OtpService {
         isUsed: true,
       },
     });
+    
+    // Remove from cache
+    const cacheKey = `otp:${userId}:${type}`;
+    await this.cacheService.delete(cacheKey);
 
     // Update user verification status
     if (type === OTPType.EMAIL_VERIFICATION) {
