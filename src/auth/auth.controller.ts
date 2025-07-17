@@ -11,15 +11,17 @@ import {
   BadRequestException,
   Headers,
   UnauthorizedException,
+  Res,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { OtpService } from './otp/otp.service';
 import { LocalAuthGuard } from './guards/local-auth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PlatformType, OTPType, User } from '@prisma/client';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { RequirePermissions } from './decorators/permissions.decorator';
 import { Public } from './decorators/public.decorator';
+import { ConfigService } from '@nestjs/config';
 
 // DTOs would normally be in separate files
 class LoginDto {
@@ -71,6 +73,7 @@ interface AuthResponse {
     verificationType?: 'email' | 'phone';
   };
   sessionId?: string;
+  analyticsId?: string;
   verificationSent?: boolean;
 }
 
@@ -85,6 +88,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly otpService: OtpService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Post('login')
@@ -94,6 +98,7 @@ export class AuthController {
   async login(
     @Body() loginDto: LoginDto,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
     @Headers('user-agent') userAgent: string,
   ): Promise<AuthResponse> {
     // The user is already validated by the LocalAuthGuard
@@ -113,7 +118,79 @@ export class AuthController {
       return response;
     }
     
+    // Set sessionId in a secure cookie if available
+    if (response.sessionId) {
+      const cookieOptions = {
+        httpOnly: true,
+        secure: this.configService.get<string>('NODE_ENV') === 'production',
+        sameSite: 'strict' as const,
+        maxAge: this.getSessionMaxAge(platform),
+        path: '/',
+      };
+      
+      res.cookie('sessionId', response.sessionId, cookieOptions);
+      
+      // Remove sessionId from response body
+      const { sessionId, ...responseWithoutSessionId } = response;
+      
+      // Set analyticsId in a non-httpOnly cookie if available
+      if (response.analyticsId) {
+        const analyticsCookieOptions = {
+          httpOnly: false, // Allow JavaScript access for client-side analytics
+          secure: this.configService.get<string>('NODE_ENV') === 'production',
+          sameSite: 'strict' as const,
+          maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
+          path: '/',
+        };
+        
+        res.cookie('analyticsId', response.analyticsId, analyticsCookieOptions);
+      }
+      
+      return responseWithoutSessionId;
+    }
+    
+    // Set analyticsId in a non-httpOnly cookie if available
+    if (response.analyticsId) {
+      const analyticsCookieOptions = {
+        httpOnly: false, // Allow JavaScript access for client-side analytics
+        secure: this.configService.get<string>('NODE_ENV') === 'production',
+        sameSite: 'strict' as const,
+        maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
+        path: '/',
+      };
+      
+      res.cookie('analyticsId', response.analyticsId, analyticsCookieOptions);
+      
+      // Remove analyticsId from response body
+      const { analyticsId, ...responseWithoutAnalyticsId } = response;
+      return responseWithoutAnalyticsId;
+    }
+    
     return response;
+  }
+  
+  // Helper method to calculate cookie max age based on platform
+  private getSessionMaxAge(platform: PlatformType): number {
+    let expirationHours: number;
+    
+    switch (platform) {
+      case PlatformType.WEB:
+        expirationHours = this.configService.get<number>('SESSION_WEB_EXPIRATION_HOURS', 24);
+        break;
+      case PlatformType.MOBILE_ANDROID:
+      case PlatformType.MOBILE_IOS:
+        expirationHours = this.configService.get<number>('SESSION_MOBILE_EXPIRATION_HOURS', 720); // 30 days
+        break;
+      case PlatformType.DESKTOP_WINDOWS:
+      case PlatformType.DESKTOP_MAC:
+      case PlatformType.DESKTOP_LINUX:
+        expirationHours = this.configService.get<number>('SESSION_DESKTOP_EXPIRATION_HOURS', 168); // 7 days
+        break;
+      default:
+        expirationHours = 24; // Default: 24 hours
+    }
+    
+    return expirationHours * 60 * 60 * 1000; // Convert hours to milliseconds
   }
 
   @Post('register')
@@ -143,6 +220,7 @@ export class AuthController {
   }
 
   @Post('refresh-token')
+  @Public()
   async refreshToken(@Body() refreshTokenDto: RefreshTokenDto): Promise<TokenResponse> {
     const { refreshToken, platform } = refreshTokenDto;
     
@@ -153,7 +231,8 @@ export class AuthController {
     try {
       return await this.authService.refreshToken(refreshToken, platform) as TokenResponse;
     } catch (error) {
-      throw new UnauthorizedException('Invalid refresh token');
+      console.error('Refresh token error:', error.message, error.stack);
+      throw new UnauthorizedException(error.message || 'Invalid or expired token');
     }
   }
 
@@ -161,12 +240,29 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async logout(
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
     @Body() body: { refreshToken?: string },
   ): Promise<{ success: boolean }> {
     const user = req.user as any;
     const sessionId = user.sessionId;
     const refreshToken = body.refreshToken;
     const platform = user.platform;
+    
+    // Clear the session cookie
+    res.clearCookie('sessionId', {
+      httpOnly: true,
+      secure: this.configService.get<string>('NODE_ENV') === 'production',
+      sameSite: 'strict',
+      path: '/',
+    });
+    
+    // Clear the analytics cookie
+    res.clearCookie('analyticsId', {
+      httpOnly: false,
+      secure: this.configService.get<string>('NODE_ENV') === 'production',
+      sameSite: 'strict',
+      path: '/',
+    });
     
     return {
       success: await this.authService.logout(

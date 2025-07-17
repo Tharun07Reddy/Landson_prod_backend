@@ -52,20 +52,43 @@ export class RefreshTokenService {
    */
   async validateRefreshToken(token: string): Promise<RefreshToken | null> {
     try {
+      console.log(`Validating refresh token: ${token.substring(0, 8)}...`);
+      
       const refreshToken = await this.prisma.refreshToken.findUnique({
         where: { token },
       });
       
       if (!refreshToken) {
+        this.logger.warn(`Refresh token not found: ${token.substring(0, 8)}...`);
+        console.log(`Token not found in database: ${token.substring(0, 8)}...`);
         return null;
       }
+      
+      console.log(`Token found: ${JSON.stringify({
+        id: refreshToken.id,
+        userId: refreshToken.userId,
+        expiresAt: refreshToken.expiresAt,
+        isRevoked: refreshToken.isRevoked,
+        createdAt: refreshToken.createdAt
+      })}`);
       
       // Check if the token is valid and not expired
       const isValid = !refreshToken.isRevoked && new Date() < refreshToken.expiresAt;
       
+      if (!isValid) {
+        if (refreshToken.isRevoked) {
+          this.logger.warn(`Refresh token has been revoked: ${token.substring(0, 8)}...`);
+          console.log(`Token is revoked: ${token.substring(0, 8)}...`);
+        } else {
+          this.logger.warn(`Refresh token has expired: ${token.substring(0, 8)}... (expired at ${refreshToken.expiresAt})`);
+          console.log(`Token expired at ${refreshToken.expiresAt}, current time: ${new Date()}`);
+        }
+      }
+      
       return isValid ? refreshToken : null;
     } catch (error) {
       this.logger.error(`Failed to validate refresh token: ${error.message}`, error.stack);
+      console.error(`Validation error: ${error.message}`, error.stack);
       return null;
     }
   }
@@ -149,19 +172,19 @@ export class RefreshTokenService {
     
     switch (platform) {
       case PlatformType.WEB:
-        expirationDays = this.configService.get<number>('REFRESH_TOKEN_WEB_EXPIRATION_DAYS', 7);
+        expirationDays = this.configService.get<number>('REFRESH_TOKEN_WEB_EXPIRATION_DAYS', 30); // Increased from 7 to 30 days
         break;
       case PlatformType.MOBILE_ANDROID:
       case PlatformType.MOBILE_IOS:
-        expirationDays = this.configService.get<number>('REFRESH_TOKEN_MOBILE_EXPIRATION_DAYS', 90);
+        expirationDays = this.configService.get<number>('REFRESH_TOKEN_MOBILE_EXPIRATION_DAYS', 180); // Increased from 90 to 180 days
         break;
       case PlatformType.DESKTOP_WINDOWS:
       case PlatformType.DESKTOP_MAC:
       case PlatformType.DESKTOP_LINUX:
-        expirationDays = this.configService.get<number>('REFRESH_TOKEN_DESKTOP_EXPIRATION_DAYS', 30);
+        expirationDays = this.configService.get<number>('REFRESH_TOKEN_DESKTOP_EXPIRATION_DAYS', 60); // Increased from 30 to 60 days
         break;
       default:
-        expirationDays = 7; // Default: 7 days
+        expirationDays = 30; // Default: 30 days (increased from 7)
     }
     
     return new Date(Date.now() + expirationDays * 24 * 60 * 60 * 1000);

@@ -484,6 +484,7 @@ model CategoryAttribute {
 model ProductCategory {
   id          String    @id @default(cuid())
   productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
   categoryId  String
   category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   isPrimary   Boolean   @default(false)
@@ -506,6 +507,243 @@ model CategoryView {
   
   @@index([categoryId])
   @@index([userId])
+  @@index([timestamp])
+}
+
+// ==================== PRODUCT MODELS ====================
+
+// Core product model
+model Product {
+  id                String            @id @default(cuid())
+  name              String
+  slug              String            @unique
+  description       String?
+  shortDescription  String?
+  sku               String?           @unique
+  barcode           String?           @unique
+  price             Decimal           @default(0)
+  compareAtPrice    Decimal?          // Original price for showing discounts
+  costPrice         Decimal?          // Internal cost price
+  dealerPrice       Decimal?          // Special pricing for dealers
+  isActive          Boolean           @default(true)
+  isFeatured        Boolean           @default(false)
+  isDigital         Boolean           @default(false)
+  hasVariants       Boolean           @default(false)
+  weight            Decimal?
+  dimensions        Json?             // {length, width, height}
+  metaTitle         String?
+  metaDescription   String?
+  metaKeywords      String[]
+  searchKeywords    String[]
+  
+  // SEO and display
+  seoScore          Int?
+  pageTitle         String?
+  canonicalUrl      String?
+  
+  // Relations
+  categories        ProductCategory[]
+  variants          ProductVariant[]
+  attributes        ProductAttribute[]
+  media             ProductMedia[]
+  reviews           ProductReview[]
+  inventory         ProductInventory?
+  relatedProducts   ProductRelation[] @relation("SourceProduct")
+  relatedToProducts ProductRelation[] @relation("TargetProduct")
+  viewHistory       ProductView[]
+  
+  // Analytics
+  viewCount         Int               @default(0)
+  purchaseCount     Int               @default(0)
+  
+  // Timestamps
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  publishedAt       DateTime?
+  
+  @@index([isActive])
+  @@index([isFeatured])
+  @@index([price])
+  @@index([viewCount])
+  @@index([purchaseCount])
+  @@index([createdAt])
+  @@index([publishedAt])
+}
+
+// Product variants (e.g., different sizes, colors)
+model ProductVariant {
+  id                String            @id @default(cuid())
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId         String
+  name              String
+  sku               String?           @unique
+  barcode           String?           @unique
+  price             Decimal?          // Override base product price
+  compareAtPrice    Decimal?          // Original price for showing discounts
+  dealerPrice       Decimal?          // Special pricing for dealers
+  isActive          Boolean           @default(true)
+  position          Int               @default(0)
+  options           Json              // {color: "Red", size: "XL", etc.}
+  
+  // Relations
+  media             ProductMedia[]
+  inventory         ProductInventory?
+  
+  // Timestamps
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  @@index([productId])
+  @@index([isActive])
+  @@index([price])
+}
+
+// Product attributes (dynamic fields)
+model ProductAttribute {
+  id                String            @id @default(cuid())
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId         String
+  name              String
+  value             String            // Stored as string, can be parsed based on type
+  type              AttributeType
+  isFilterable      Boolean           @default(false)
+  isSearchable      Boolean           @default(false)
+  isVariantOption   Boolean           @default(false)
+  position          Int               @default(0)
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  @@unique([productId, name])
+  @@index([productId])
+  @@index([isFilterable])
+  @@index([isSearchable])
+}
+
+// Product media (images, videos, etc.)
+model ProductMedia {
+  id                String            @id @default(cuid())
+  product           Product?          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId         String?
+  variant           ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  variantId         String?
+  type              MediaType         @default(IMAGE)
+  url               String
+  altText           String?
+  title             String?
+  position          Int               @default(0)
+  width             Int?
+  height            Int?
+  size              Int?              // File size in bytes
+  mimeType          String?
+  
+  createdAt         DateTime          @default(now())
+  
+  @@index([productId])
+  @@index([variantId])
+  @@index([type])
+  @@index([position])
+}
+
+// Product inventory tracking
+model ProductInventory {
+  id                String            @id @default(cuid())
+  product           Product?          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId         String?           @unique
+  variant           ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  variantId         String?           @unique
+  quantity          Int               @default(0)
+  lowStockThreshold Int?
+  backorderAllowed  Boolean           @default(false)
+  reservedQuantity  Int               @default(0)
+  warehouseLocation String?
+  
+  updatedAt         DateTime          @updatedAt
+  
+  @@index([quantity])
+  @@index([lowStockThreshold])
+}
+
+// Product reviews and ratings
+model ProductReview {
+  id                String            @id @default(cuid())
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId         String
+  userId            String?           // Optional, for authenticated users
+  title             String?
+  content           String
+  rating            Int               // 1-5 star rating
+  isVerifiedPurchase Boolean          @default(false)
+  isApproved        Boolean           @default(false)
+  helpfulCount      Int               @default(0)
+  reportCount       Int               @default(0)
+  response          String?           // Merchant response to review
+  responseAt        DateTime?
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  @@index([productId])
+  @@index([userId])
+  @@index([rating])
+  @@index([isApproved])
+  @@index([createdAt])
+}
+
+// Related products
+model ProductRelation {
+  id                String            @id @default(cuid())
+  sourceProduct     Product           @relation("SourceProduct", fields: [sourceProductId], references: [id], onDelete: Cascade)
+  sourceProductId   String
+  targetProduct     Product           @relation("TargetProduct", fields: [targetProductId], references: [id], onDelete: Cascade)
+  targetProductId   String
+  relationType      RelationType      @default(RELATED)
+  position          Int               @default(0)
+  
+  createdAt         DateTime          @default(now())
+  
+  @@unique([sourceProductId, targetProductId])
+  @@index([sourceProductId])
+  @@index([targetProductId])
+  @@index([relationType])
+}
+
+// Product view analytics
+model ProductView {
+  id                String            @id @default(cuid())
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId         String
+  userId            String?
+  sessionId         String?
+  analyticsId       String?
+  deviceInfo        Json?
+  referer           String?
+  timestamp         DateTime          @default(now())
+  
+  @@index([productId])
+  @@index([userId])
+  @@index([sessionId])
+  @@index([analyticsId])
+  @@index([timestamp])
+}
+
+// Product search analytics
+model ProductSearch {
+  id                String            @id @default(cuid())
+  query             String
+  userId            String?
+  sessionId         String?
+  analyticsId       String?
+  resultCount       Int
+  filters           Json?             // Applied filters
+  sortBy            String?
+  clickedProductId  String?
+  timestamp         DateTime          @default(now())
+  
+  @@index([query])
+  @@index([userId])
+  @@index([sessionId])
+  @@index([analyticsId])
   @@index([timestamp])
 }
 
@@ -757,5 +995,20 @@ enum SenderType {
   USER
   AGENT
   SYSTEM
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  DOCUMENT
+  MODEL_3D
+}
+
+enum RelationType {
+  RELATED
+  UPSELL
+  CROSS_SELL
+  ACCESSORY
+  ALTERNATIVE
 }
 

@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { AppService } from './app.service';
 import { ConfigService } from './config/config.service';
+import { Public } from './auth/decorators/public.decorator';
 
 @Controller()
 export class AppController {
@@ -12,6 +13,21 @@ export class AppController {
   @Get()
   getHello(): string {
     return this.appService.getHello();
+  }
+
+  @Get('health')
+  @Public()
+  getHealth() {
+    return this.appService.getHealth();
+  }
+
+  @Get('ping')
+  @Public()
+  ping() {
+    return { 
+      status: 'alive', 
+      timestamp: new Date().toISOString() 
+    };
   }
 
   @Get('config-demo')

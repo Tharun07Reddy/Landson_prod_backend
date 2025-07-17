@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
 import { MongoService } from './mongo.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AnalyticsService, EventData } from './analytics.service';
+import { Public } from 'src/auth/decorators/public.decorator';
 
 @Controller('events')
 export class EventsController {
@@ -12,6 +13,7 @@ export class EventsController {
   ) {}
 
   @Get()
+  @Public()
   async getEvents(
     @Query('from') from: string,
     @Query('to') to: string,
@@ -53,6 +55,7 @@ export class EventsController {
   }
 
   @Get('types')
+  @Public()
   async getEventTypes() {
     const result = await this.mongoService.aggregate('events', [
       { $group: { _id: '$type' } },
@@ -73,6 +76,7 @@ export class EventsController {
   }
 
   @Get('summary')
+  @Public()
   async getEventsSummary(
     @Query('from') from: string,
     @Query('to') to: string,

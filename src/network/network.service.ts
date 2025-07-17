@@ -32,7 +32,7 @@ export class NetworkService implements OnModuleInit {
           environment: process.env.NODE_ENV || undefined,
         },
       });
-
+      console.log(corsConfigs);
       // Group CORS configs by platform
       for (const platformType of Object.values(PlatformType)) {
         const platformConfig = corsConfigs.find(c => c.platform === platformType);

@@ -17,6 +17,7 @@ import { RoleService } from '../role/role.service';
 import { PermissionService } from '../permission/permission.service';
 import { SmsModule } from '../sms/sms.module';
 import { EmailModule } from '../email/email.module';
+import { AnalyticsModule } from '../analytics/analytics.module';
 
 @Global()
 @Module({
@@ -37,6 +38,7 @@ import { EmailModule } from '../email/email.module';
     }),
     SmsModule,
     EmailModule,
+    AnalyticsModule,
   ],
   controllers: [AuthController],
   providers: [

@@ -74,7 +74,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       // Fix: Ensure defaultFrom is always a string by using nullish coalescing
       const emailFrom = await this.configService.get<string>('EMAIL_FROM', user);
       this.defaultFrom = emailFrom ?? user ?? 'noreply@example.com';
-      
+      console.log(emailFrom);
       this.isConnected = true;
       console.log('Connected to SMTP server');
     } catch (error) {

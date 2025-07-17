@@ -8,8 +8,10 @@ import { SessionService } from './session/session.service';
 import { RefreshTokenService } from './token/refresh-token.service';
 import { RoleService } from '../role/role.service';
 import { PermissionService } from '../permission/permission.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 import { PlatformType, User, OTPType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 
 interface LoginResponse {
   accessToken: string;
@@ -20,6 +22,7 @@ interface LoginResponse {
     verificationType?: 'email' | 'phone';
   };
   sessionId?: string;
+  analyticsId?: string;
   verificationSent?: boolean;
 }
 
@@ -30,6 +33,7 @@ interface TokenPayload {
   roles: string[];
   platform: PlatformType;
   sessionId?: string;
+  analyticsId?: string;
 }
 
 @Injectable()
@@ -46,6 +50,7 @@ export class AuthService {
     private readonly refreshTokenService: RefreshTokenService,
     private readonly roleService: RoleService,
     private readonly permissionService: PermissionService,
+    private readonly analyticsService: AnalyticsService,
     @Inject('PLATFORM_AUTH_STRATEGIES') private readonly platformStrategies: Record<string, any>,
   ) {}
 
@@ -91,43 +96,48 @@ export class AuthService {
    * Login with username/email and password
    */
   async login(user: any, platform: PlatformType, deviceId?: string, ipAddress?: string, userAgent?: string): Promise<LoginResponse> {
-    // Check if user email/phone is verified
-    if (user.email && !user.isEmailVerified) {
-      // Generate OTP for email verification
-      const otp = await this.otpService.generateOTP(user.id, OTPType.EMAIL_VERIFICATION);
-      
-      // Return a special response indicating verification needed
-      return {
-        accessToken: '',
-        expiresIn: 0,
-        user: {
-          id: user.id,
-          email: user.email,
-          isEmailVerified: false,
-          needsVerification: true,
-          verificationType: 'email'
-        },
-        verificationSent: true
-      };
-    }
+    // Check if user has either verified email OR verified phone
+    const hasVerifiedEmail = user.email && user.isEmailVerified;
+    const hasVerifiedPhone = user.phone && user.isPhoneVerified;
     
-    if (user.phone && !user.isPhoneVerified) {
-      // Generate OTP for phone verification
-      const otp = await this.otpService.generateOTP(user.id, OTPType.PHONE_VERIFICATION);
-      
-      // Return a special response indicating verification needed
-      return {
-        accessToken: '',
-        expiresIn: 0,
-        user: {
-          id: user.id,
-          phone: user.phone,
-          isPhoneVerified: false,
-          needsVerification: true,
-          verificationType: 'phone'
-        },
-        verificationSent: true
-      };
+    // If user has neither verified email nor verified phone, require verification
+    if (!hasVerifiedEmail && !hasVerifiedPhone) {
+      // Prioritize email verification if available, otherwise use phone
+      if (user.email) {
+        // Generate OTP for email verification
+        const otp = await this.otpService.generateOTP(user.id, OTPType.EMAIL_VERIFICATION);
+        
+        // Return a special response indicating verification needed
+        return {
+          accessToken: '',
+          expiresIn: 0,
+          user: {
+            id: user.id,
+            email: user.email,
+            isEmailVerified: false,
+            needsVerification: true,
+            verificationType: 'email'
+          },
+          verificationSent: true
+        };
+      } else if (user.phone) {
+        // Generate OTP for phone verification
+        const otp = await this.otpService.generateOTP(user.id, OTPType.PHONE_VERIFICATION);
+        
+        // Return a special response indicating verification needed
+        return {
+          accessToken: '',
+          expiresIn: 0,
+          user: {
+            id: user.id,
+            phone: user.phone,
+            isPhoneVerified: false,
+            needsVerification: true,
+            verificationType: 'phone'
+          },
+          verificationSent: true
+        };
+      }
     }
 
     // Get platform-specific settings
@@ -155,6 +165,9 @@ export class AuthService {
       sessionId = session.id;
     }
 
+    // Generate analytics ID
+    const analyticsId = uuidv4();
+
     // Generate JWT token
     const payload: TokenPayload = {
       sub: user.id,
@@ -163,6 +176,7 @@ export class AuthService {
       roles,
       platform,
       sessionId,
+      analyticsId,
     };
 
     const accessToken = this.jwtService.sign(payload, {
@@ -179,8 +193,26 @@ export class AuthService {
     // Update user's last login time
     await this.userService.updateLastLogin(user.id, platform);
 
+    // Track login event in analytics
+    await this.analyticsService.trackEvent({
+      type: 'auth_login',
+      source: 'auth_service',
+      userId: user.id,
+      sessionId,
+      properties: {
+        platform,
+        success: true,
+      },
+      metadata: {
+        ip: ipAddress,
+        userAgent,
+      },
+    }).catch(err => {
+      this.logger.error(`Failed to track login event: ${err.message}`, err.stack);
+    });
+
     // Log the login event
-    this.logAuthEvent(user.id, 'login', platform, { deviceId, ipAddress });
+    this.logAuthEvent(user.id, 'login', platform, { deviceId, ipAddress, analyticsId });
 
     // Return login response with user data
     const { password, ...userData } = user;
@@ -205,6 +237,7 @@ export class AuthService {
       expiresIn: expiresInSeconds,
       user: userData,
       sessionId,
+      analyticsId,
     };
   }
 
@@ -279,70 +312,138 @@ export class AuthService {
    * Refresh an access token using a refresh token
    */
   async refreshToken(token: string, platform: PlatformType): Promise<Partial<LoginResponse>> {
-    // Validate the refresh token
-    const refreshTokenData = await this.refreshTokenService.validateRefreshToken(token);
-    
-    if (!refreshTokenData || refreshTokenData.isRevoked) {
-      throw new UnauthorizedException('Invalid refresh token');
-    }
+    try {
+      console.log(`Attempting to refresh token: ${token.substring(0, 8)}...`);
+      
+      // Validate the refresh token
+      const refreshTokenData = await this.refreshTokenService.validateRefreshToken(token);
+      
+      if (!refreshTokenData) {
+        this.logger.warn(`Invalid refresh token attempt with token: ${token.substring(0, 8)}...`);
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+      
+      if (refreshTokenData.isRevoked) {
+        this.logger.warn(`Attempt to use revoked refresh token: ${token.substring(0, 8)}...`);
+        throw new UnauthorizedException('Refresh token has been revoked');
+      }
+      
+      // Check expiration manually to ensure correct date comparison
+      const now = new Date();
+      const expiresAt = new Date(refreshTokenData.expiresAt);
+      
+      if (now > expiresAt) {
+        this.logger.warn(`Refresh token expired: ${token.substring(0, 8)}... (expired at ${expiresAt.toISOString()}, current time: ${now.toISOString()})`);
+        throw new UnauthorizedException('Refresh token has expired');
+      }
 
-    // Get the user
-    const user = await this.prisma.user.findUnique({
-      where: { id: refreshTokenData.userId },
-      include: {
-        userRoles: {
-          include: {
-            role: true,
+      // Get the user
+      const user = await this.prisma.user.findUnique({
+        where: { id: refreshTokenData.userId },
+        include: {
+          userRoles: {
+            include: {
+              role: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('User not found or inactive');
-    }
-
-    // Get platform-specific settings
-    const platformKey = this.getPlatformKey(platform);
-    const platformConfig = this.platformStrategies[platformKey];
-    
-    // Get user roles
-    const roles = user.userRoles.map(ur => ur.role.name);
-    
-    // Generate new JWT token
-    const payload: TokenPayload = {
-      sub: user.id,
-      username: user.username || '',
-      email: user.email || undefined,
-      roles,
-      platform,
-    };
-
-    const accessToken = this.jwtService.sign(payload, {
-      expiresIn: platformConfig.tokenExpiration,
-    });
-
-    // Calculate token expiration in seconds
-    const tokenExpirationString = platformConfig.tokenExpiration;
-    let expiresInSeconds = 900; // Default 15 minutes
-    
-    if (typeof tokenExpirationString === 'string') {
-      if (tokenExpirationString.endsWith('m')) {
-        expiresInSeconds = parseInt(tokenExpirationString) * 60;
-      } else if (tokenExpirationString.endsWith('h')) {
-        expiresInSeconds = parseInt(tokenExpirationString) * 3600;
-      } else if (tokenExpirationString.endsWith('d')) {
-        expiresInSeconds = parseInt(tokenExpirationString) * 86400;
+      if (!user) {
+        this.logger.warn(`User not found for refresh token: ${token.substring(0, 8)}...`);
+        throw new UnauthorizedException('User not found');
       }
+      
+      if (!user.isActive) {
+        this.logger.warn(`Inactive user attempted token refresh: ${user.id}`);
+        throw new UnauthorizedException('User account is inactive');
+      }
+
+      // Get platform-specific settings
+      const platformKey = this.getPlatformKey(platform);
+      const platformConfig = this.platformStrategies[platformKey];
+      
+      if (!platformConfig) {
+        throw new BadRequestException(`Unsupported platform: ${platform}`);
+      }
+      
+      // Get user roles
+      const roles = user.userRoles.map(ur => ur.role.name);
+      
+      // Generate new JWT token
+      const payload: TokenPayload = {
+        sub: user.id,
+        username: user.username || '',
+        email: user.email || undefined,
+        roles,
+        platform,
+      };
+
+      const accessToken = this.jwtService.sign(payload, {
+        expiresIn: platformConfig.tokenExpiration,
+      });
+
+      // Calculate token expiration in seconds
+      const tokenExpirationString = platformConfig.tokenExpiration;
+      let expiresInSeconds = 900; // Default 15 minutes
+      
+      if (typeof tokenExpirationString === 'string') {
+        if (tokenExpirationString.endsWith('m')) {
+          expiresInSeconds = parseInt(tokenExpirationString) * 60;
+        } else if (tokenExpirationString.endsWith('h')) {
+          expiresInSeconds = parseInt(tokenExpirationString) * 3600;
+        } else if (tokenExpirationString.endsWith('d')) {
+          expiresInSeconds = parseInt(tokenExpirationString) * 86400;
+        }
+      }
+      
+      // Create a new refresh token if the current one is nearing expiration
+      // (e.g., less than 25% of its original lifetime remaining)
+      const timeToExpiry = expiresAt.getTime() - now.getTime();
+      const refreshTokenLifetime = expiresAt.getTime() - refreshTokenData.createdAt.getTime();
+      const shouldRotateToken = timeToExpiry < (refreshTokenLifetime * 0.25);
+      
+      let newRefreshTokenValue: string | undefined;
+      
+      if (shouldRotateToken) {
+        // Create new refresh token
+        const newRefreshToken = await this.refreshTokenService.createRefreshToken({
+          userId: user.id,
+          platform,
+          deviceId: refreshTokenData.deviceId || undefined,
+        });
+        
+        // Revoke the old token
+        await this.refreshTokenService.revokeRefreshToken(token);
+        
+        newRefreshTokenValue = newRefreshToken.token;
+        this.logger.log(`Rotated refresh token for user ${user.id} due to approaching expiration`);
+      }
+
+      // Log the token refresh event
+      this.logAuthEvent(user.id, 'token_refresh', platform, {
+        tokenRotated: shouldRotateToken,
+      });
+
+      const response: Partial<LoginResponse> = {
+        accessToken,
+        expiresIn: expiresInSeconds,
+      };
+      
+      if (newRefreshTokenValue) {
+        response.refreshToken = newRefreshTokenValue;
+      }
+      
+      console.log(`Successfully refreshed token for user: ${user.id}`);
+      return response;
+    } catch (error) {
+      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      this.logger.error(`Unexpected error during token refresh: ${error.message}`, error.stack);
+      throw new UnauthorizedException('Failed to refresh token');
     }
-
-    // Log the token refresh event
-    this.logAuthEvent(user.id, 'token_refresh', platform, {});
-
-    return {
-      accessToken,
-      expiresIn: expiresInSeconds,
-    };
   }
 
   /**
