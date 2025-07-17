@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { User, PlatformType } from '@prisma/client';
+import { User, PlatformType, AuditLog, Session } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -210,6 +210,145 @@ export class UserService {
     } catch (error) {
       this.logger.error(`Error reactivating account: ${error.message}`, error.stack);
       return false;
+    }
+  }
+
+  /**
+   * Get user activity logs
+   */
+  async getUserActivity(
+    userId: string,
+    options: {
+      page?: number;
+      limit?: number;
+      action?: string;
+      resource?: string;
+      startDate?: Date;
+      endDate?: Date;
+    } = {},
+  ): Promise<{ logs: AuditLog[]; total: number; page: number; limit: number }> {
+    try {
+      const {
+        page = 1,
+        limit = 10,
+        action,
+        resource,
+        startDate,
+        endDate,
+      } = options;
+
+      const skip = (page - 1) * limit;
+
+      // Build where conditions
+      const where: any = { userId };
+      
+      if (action) {
+        where.action = action;
+      }
+      
+      if (resource) {
+        where.resource = resource;
+      }
+      
+      if (startDate || endDate) {
+        where.createdAt = {};
+        
+        if (startDate) {
+          where.createdAt.gte = startDate;
+        }
+        
+        if (endDate) {
+          where.createdAt.lte = endDate;
+        }
+      }
+
+      // Get logs with pagination
+      const [logs, total] = await Promise.all([
+        this.prisma.auditLog.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.auditLog.count({ where }),
+      ]);
+
+      return {
+        logs,
+        total,
+        page,
+        limit,
+      };
+    } catch (error) {
+      this.logger.error(`Error getting user activity: ${error.message}`, error.stack);
+      return {
+        logs: [],
+        total: 0,
+        page: options.page || 1,
+        limit: options.limit || 10,
+      };
+    }
+  }
+
+  /**
+   * Get user sessions
+   */
+  async getUserSessions(
+    userId: string,
+    options: {
+      page?: number;
+      limit?: number;
+      includeInvalid?: boolean;
+      platform?: PlatformType;
+    } = {},
+  ): Promise<{ sessions: Session[]; total: number; page: number; limit: number }> {
+    try {
+      const {
+        page = 1,
+        limit = 10,
+        includeInvalid = false,
+        platform,
+      } = options;
+
+      const skip = (page - 1) * limit;
+
+      // Build where conditions
+      const where: any = { userId };
+      
+      if (!includeInvalid) {
+        where.isValid = true;
+        where.expiresAt = { gt: new Date() };
+      }
+      
+      if (platform) {
+        where.platform = platform;
+      }
+
+      // Get sessions with pagination
+      const [sessions, total] = await Promise.all([
+        this.prisma.session.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { lastActiveAt: 'desc' },
+        }),
+        this.prisma.session.count({ where }),
+      ]);
+
+      return {
+        sessions,
+        total,
+        page,
+        limit,
+      };
+    } catch (error) {
+      this.logger.error(`Error getting user sessions: ${error.message}`, error.stack);
+      return {
+        sessions: [],
+        total: 0,
+        page: options.page || 1,
+        limit: options.limit || 10,
+      };
     }
   }
 } 

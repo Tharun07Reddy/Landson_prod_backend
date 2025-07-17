@@ -74,6 +74,23 @@ class AssignRoleDto {
   roleId: string;
 }
 
+// Add these DTOs after existing DTOs
+class UserActivityQueryDto {
+  page?: string;
+  limit?: string;
+  action?: string;
+  resource?: string;
+  startDate?: string;
+  endDate?: string;
+}
+
+class UserSessionsQueryDto {
+  page?: string;
+  limit?: string;
+  includeInvalid?: string;
+  platform?: PlatformType;
+}
+
 @Controller('users')
 export class UserController {
   constructor(
@@ -207,6 +224,121 @@ export class UserController {
     return {
       success,
       message: success ? 'Permissions cache refreshed successfully' : 'Failed to refresh permissions cache'
+    };
+  }
+
+  // Get user activity logs
+  @Get('activity/:userId')
+  @UseGuards(JwtAuthGuard)
+  @RequirePermissions({ resource: 'users', action: 'view' })
+  async getUserActivity(
+    @Param('userId') userId: string,
+    @Query() query: UserActivityQueryDto,
+  ): Promise<any> {
+    // Parse query parameters
+    const options = {
+      page: query.page ? parseInt(query.page, 10) : 1,
+      limit: query.limit ? parseInt(query.limit, 10) : 10,
+      action: query.action,
+      resource: query.resource,
+      startDate: query.startDate ? new Date(query.startDate) : undefined,
+      endDate: query.endDate ? new Date(query.endDate) : undefined,
+    };
+    
+    const result = await this.userService.getUserActivity(userId, options);
+    
+    return {
+      ...result,
+      logs: result.logs.map(log => ({
+        ...log,
+        // Format dates for better readability
+        createdAt: log.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  // Get user sessions
+  @Get('sessions/:userId')
+  @UseGuards(JwtAuthGuard)
+  @RequirePermissions({ resource: 'users', action: 'view' })
+  async getUserSessions(
+    @Param('userId') userId: string,
+    @Query() query: UserSessionsQueryDto,
+  ): Promise<any> {
+    // Parse query parameters
+    const options = {
+      page: query.page ? parseInt(query.page, 10) : 1,
+      limit: query.limit ? parseInt(query.limit, 10) : 10,
+      includeInvalid: query.includeInvalid === 'true',
+      platform: query.platform,
+    };
+    
+    const result = await this.userService.getUserSessions(userId, options);
+    
+    return {
+      ...result,
+      sessions: result.sessions.map(session => ({
+        ...session,
+        // Format dates for better readability
+        createdAt: session.createdAt.toISOString(),
+        updatedAt: session.updatedAt.toISOString(),
+        expiresAt: session.expiresAt.toISOString(),
+        lastActiveAt: session.lastActiveAt.toISOString(),
+      })),
+    };
+  }
+
+  // Get detailed user permissions
+  @Get('permissions/detailed/:userId')
+  @UseGuards(JwtAuthGuard)
+  @RequirePermissions({ resource: 'users', action: 'view' })
+  async getDetailedUserPermissions(
+    @Param('userId') userId: string
+  ): Promise<any> {
+    const cacheKey = `user:${userId}:detailed_permissions`;
+    
+    // Try to get detailed permissions from cache first
+    const cachedPermissions = await this.cacheService.get(cacheKey);
+    
+    if (cachedPermissions) {
+      return {
+        permissions: cachedPermissions,
+        source: 'cache'
+      };
+    }
+    
+    // If not in cache, fetch from database
+    const roles = await this.roleService.getUserRoles(userId);
+    
+    // Get permissions for each role
+    const permissionsByRole = await Promise.all(
+      roles.map(async (role) => {
+        // Get role permissions from database directly
+        const rolePermissions = await this.prisma.rolePermission.findMany({
+          where: { roleId: role.id },
+          include: { permission: true },
+        });
+        
+        return {
+          roleId: role.id,
+          roleName: role.name,
+          permissions: rolePermissions.map(rp => ({
+            id: rp.permission.id,
+            name: rp.permission.name,
+            resource: rp.permission.resource,
+            action: rp.permission.action,
+            description: rp.permission.description,
+          })),
+        };
+      })
+    );
+    
+    // Store in cache for future requests (1 hour TTL)
+    await this.cacheService.set(cacheKey, permissionsByRole, 3600);
+    
+    return {
+      permissions: permissionsByRole,
+      source: 'database'
     };
   }
 
