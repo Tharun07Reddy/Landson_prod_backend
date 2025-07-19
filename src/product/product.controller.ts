@@ -283,4 +283,13 @@ export class ProductController {
   async getZeroResultSearches(@Query('limit') limit = 10) {
     return this.analyticsService.getZeroResultSearches(limit);
   }
+
+  // Free Items endpoints
+  @Get(':productId/free-items')
+  @Public()
+  async getProductFreeItems(@Param('productId') productId: string) {
+    // This endpoint is handled by the FreeItemService
+    // It's included here for API consistency
+    return { message: 'Use /free-items/products/:productId endpoint' };
+  }
 } 

@@ -1,0 +1,8 @@
+# Environment
+NODE_ENV=development
+
+# Database
+DATABASE_URL="postgresql://username:password@localhost:5432/mydb?schema=public"
+
+# Note: All other configuration is stored in the database and managed through the ConfigService
+# You can run the seed script to initialize the configuration: npx prisma db seed 

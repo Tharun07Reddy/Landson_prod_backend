@@ -551,6 +551,7 @@ model Product {
   relatedProducts   ProductRelation[] @relation("SourceProduct")
   relatedToProducts ProductRelation[] @relation("TargetProduct")
   viewHistory       ProductView[]
+  freeItems         FreeItemProduct[]
   
   // Analytics
   viewCount         Int               @default(0)
@@ -926,6 +927,42 @@ model AgentSchedule {
   @@index([agentId])
   @@index([dayOfWeek])
   @@index([isActive])
+}
+
+// ==================== FREE ITEMS MODELS ====================
+
+// FreeItems model for promotional items that can be attached to products
+model FreeItem {
+  id          String            @id @default(cuid())
+  name        String
+  description String?
+  imageUrl    String?
+  isActive    Boolean           @default(true)
+  sortOrder   Int               @default(0)
+  
+  // Relations
+  products    FreeItemProduct[]
+  
+  // Audit fields
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  
+  @@index([isActive])
+  @@index([sortOrder])
+}
+
+// Junction table for products and free items
+model FreeItemProduct {
+  id          String    @id @default(cuid())
+  freeItem    FreeItem  @relation(fields: [freeItemId], references: [id], onDelete: Cascade)
+  freeItemId  String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId   String
+  createdAt   DateTime  @default(now())
+  
+  @@unique([freeItemId, productId])
+  @@index([freeItemId])
+  @@index([productId])
 }
 
 // ==================== ENUMS ====================

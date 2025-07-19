@@ -671,4 +671,54 @@ export class ProductService {
       ...relatedByCategoryIds,
     ];
   }
+
+  /**
+   * Find products with free items
+   */
+  async findWithFreeItems(limit = 10, page = 1) {
+    const skip = (page - 1) * limit;
+    
+    const [products, total] = await Promise.all([
+      this.prisma.product.findMany({
+        where: {
+          freeItems: {
+            some: {},
+          },
+        },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          media: {
+            orderBy: {
+              position: 'asc',
+            },
+            take: 1,
+          },
+          freeItems: {
+            include: {
+              freeItem: true,
+            },
+          },
+        },
+      }),
+      this.prisma.product.count({
+        where: {
+          freeItems: {
+            some: {},
+          },
+        },
+      }),
+    ]);
+    
+    return {
+      data: products,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
 } 

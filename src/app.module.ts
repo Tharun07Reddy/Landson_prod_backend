@@ -15,6 +15,7 @@ import { UserModule } from './user/user.module';
 import { CategoryModule } from './category/category.module';
 import { SupportModule } from './support/support.module';
 import { ProductModule } from './product/product.module';
+import { FreeItemModule } from './free-item/free-item.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionGuard } from './auth/guards/permission.guard';
 
@@ -36,6 +37,7 @@ import { PermissionGuard } from './auth/guards/permission.guard';
     CategoryModule,
     ProductModule,
     SupportModule,
+    FreeItemModule,
   ],
   controllers: [AppController],
   providers: [

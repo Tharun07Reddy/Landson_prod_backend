@@ -1,677 +1,562 @@
-import { PrismaClient, PlatformType, OTPType, AttributeType } from '@prisma/client';
-import * as bcrypt from 'bcrypt';
-import slugify from 'slugify';
+import { PrismaClient, PlatformType, ValueType, ServiceType } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Seeding database...');
-  
-  // Create default roles
-  const adminRole = await createRoleIfNotExists('admin', 'Administrator with full access', true);
-  const userRole = await createRoleIfNotExists('user', 'Regular user with limited access', true);
-  
-  // Create permissions
-  await createPermissions();
-  
-  // Assign permissions to roles
-  await assignPermissionsToRole(adminRole.id, 'admin');
-  await assignPermissionsToRole(userRole.id, 'user');
-  
-  // Create admin user
-  const adminUser = await createUserIfNotExists({
-    email: 'admin@example.com',
-    phone: '+1234567890',
-    username: 'admin',
-    password: 'Admin@123',
-    firstName: 'Admin',
-    lastName: 'User',
-    isActive: true,
-    isEmailVerified: true,
-    isPhoneVerified: true,
-    roles: ['admin']
-  });
-  
-  // Create regular user
-  const regularUser = await createUserIfNotExists({
-    email: 'user@example.com',
-    phone: '+1987654321',
-    username: 'user',
-    password: 'User@123',
-    firstName: 'Regular',
-    lastName: 'User',
-    isActive: true,
-    isEmailVerified: false,
-    isPhoneVerified: false,
-    roles: ['user']
-  });
-  
-  // Create categories
-  await seedCategories();
-  
-  console.log('Seeding completed successfully!');
-}
+  console.log('Starting database seeding...');
 
-// Helper function to create a role if it doesn't exist
-async function createRoleIfNotExists(name: string, description: string, isSystem: boolean) {
-  const existingRole = await prisma.role.findUnique({
-    where: { name }
-  });
-  
-  if (existingRole) {
-    console.log(`Role '${name}' already exists.`);
-    return existingRole;
-  }
-  
-  const role = await prisma.role.create({
-    data: {
-      name,
-      description,
-      isSystem
-    }
-  });
-  
-  console.log(`Created role: ${role.name}`);
-  return role;
-}
-
-// Helper function to create a user if they don't exist
-async function createUserIfNotExists({
-  email,
-  phone,
-  username,
-  password,
-  firstName,
-  lastName,
-  isActive,
-  isEmailVerified,
-  isPhoneVerified,
-  roles
-}: {
-  email: string;
-  phone: string;
-  username: string;
-  password: string;
-  firstName: string;
-  lastName: string;
-  isActive: boolean;
-  isEmailVerified: boolean;
-  isPhoneVerified: boolean;
-  roles: string[];
-}) {
-  const existingUser = await prisma.user.findFirst({
-    where: {
-      OR: [
-        { email },
-        { phone },
-        { username }
-      ]
-    }
-  });
-  
-  if (existingUser) {
-    console.log(`User with email '${email}' or phone '${phone}' or username '${username}' already exists.`);
-    return existingUser;
-  }
-  
-  // Hash the password
-  const hashedPassword = await bcrypt.hash(password, 10);
-  
-  // Create the user
-  const user = await prisma.user.create({
-    data: {
-      email,
-      phone,
-      username,
-      password: hashedPassword,
-      firstName,
-      lastName,
-      isActive,
-      isEmailVerified,
-      isPhoneVerified,
-      platform: PlatformType.WEB,
-      deviceInfo: { lastDevice: 'Seed script' }
-    }
-  });
-  
-  // Assign roles to the user
-  for (const roleName of roles) {
-    const role = await prisma.role.findUnique({
-      where: { name: roleName }
-    });
+  try {
+    // ==================== CONFIGURATION CATEGORIES ====================
+    console.log('Creating configuration categories...');
     
-    if (role) {
-      await prisma.userRole.create({
-        data: {
-          userId: user.id,
-          roleId: role.id
-        }
-      });
-    }
-  }
-  
-  // Create a verification OTP for non-verified users
-  if (!isEmailVerified) {
-    await prisma.oTP.create({
-      data: {
-        userId: user.id,
-        code: '123456', // Simple code for testing
-        type: OTPType.EMAIL_VERIFICATION,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-      }
+    const securityCategory = await prisma.configCategory.upsert({
+      where: { name: 'security' },
+      update: {},
+      create: {
+        name: 'security',
+        description: 'Security-related configuration settings',
+      },
     });
-  }
-  
-  if (!isPhoneVerified) {
-    await prisma.oTP.create({
-      data: {
-        userId: user.id,
-        code: '123456', // Simple code for testing
-        type: OTPType.PHONE_VERIFICATION,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-      }
+
+    const networkCategory = await prisma.configCategory.upsert({
+      where: { name: 'network' },
+      update: {},
+      create: {
+        name: 'network',
+        description: 'Network and connectivity settings',
+      },
     });
-  }
-  
-  console.log(`Created user: ${user.email}`);
-  return user;
-}
 
-// Create all permissions
-async function createPermissions() {
-  // Define resources and their actions
-  const resources = [
-    {
-      name: 'users',
-      actions: ['create', 'read', 'update', 'delete', 'list', 'manage']
-    },
-    {
-      name: 'roles',
-      actions: ['create', 'read', 'update', 'delete', 'list', 'assign', 'manage']
-    },
-    {
-      name: 'permissions',
-      actions: ['create', 'read', 'update', 'delete', 'list', 'assign', 'manage']
-    },
-    {
-      name: 'products',
-      actions: ['create', 'read', 'update', 'delete', 'list', 'manage']
-    },
-    {
-      name: 'categories',
-      actions: ['create', 'read', 'update', 'delete', 'list', 'manage']
-    },
-    {
-      name: 'orders',
-      actions: ['create', 'read', 'update', 'delete', 'list', 'process', 'cancel', 'manage']
-    },
-    {
-      name: 'payments',
-      actions: ['create', 'read', 'refund', 'list', 'manage']
-    },
-    {
-      name: 'config',
-      actions: ['read', 'update', 'manage']
-    },
-    {
-      name: 'analytics',
-      actions: ['read', 'export', 'manage']
-    }
-  ];
-  
-  // Create permissions for each resource and action
-  for (const resource of resources) {
-    for (const action of resource.actions) {
-      const permissionName = `${resource.name}:${action}`;
-      let description = `Permission to ${action} ${resource.name}`;
-      
-      // Special description for manage permission
-      if (action === 'manage') {
-        description = `Full access to all operations on ${resource.name}`;
-      }
-      
-      const existingPermission = await prisma.permission.findUnique({
-        where: { name: permissionName }
-      });
-      
-      if (!existingPermission) {
-        await prisma.permission.create({
-          data: {
-            name: permissionName,
-            description,
-            resource: resource.name,
-            action
-          }
-        });
-        console.log(`Created permission: ${permissionName}`);
-      }
-    }
-  }
-}
+    const notificationCategory = await prisma.configCategory.upsert({
+      where: { name: 'notifications' },
+      update: {},
+      create: {
+        name: 'notifications',
+        description: 'Notification service settings',
+      },
+    });
 
-// Assign permissions to a role
-async function assignPermissionsToRole(roleId: string, roleName: string) {
-  // Get all permissions
-  const permissions = await prisma.permission.findMany();
-  
-  // Define permission assignments based on role
-  let permissionNames: string[] = [];
-  
-  if (roleName === 'admin') {
-    // Admin gets all permissions
-    permissionNames = permissions.map(p => p.name);
-  } else if (roleName === 'user') {
-    // Regular users get limited permissions
-    permissionNames = [
-      // Product permissions
-      'products:read',
-      'products:list',
-      
-      // Category permissions
-      'categories:read',
-      'categories:list',
-      
-      // Order permissions
-      'orders:create',
-      'orders:read',
-      'orders:list',
-      'orders:cancel',
-      
-      // Payment permissions
-      'payments:create',
-      'payments:read',
-      
-      // User permissions (only read their own data)
-      'users:read'
-    ];
-  }
-  
-  // Assign permissions to the role
-  for (const permissionName of permissionNames) {
-    const permission = permissions.find(p => p.name === permissionName);
-    
-    if (permission) {
-      const existingRolePermission = await prisma.rolePermission.findFirst({
-        where: {
-          roleId,
-          permissionId: permission.id
+    const serviceCategory = await prisma.configCategory.upsert({
+      where: { name: 'services' },
+      update: {},
+      create: {
+        name: 'services',
+        description: 'External service configurations',
+      },
+    });
+
+    // ==================== CONFIGURATION KEYS ====================
+    console.log('Creating configuration keys...');
+
+    // JWT Configuration
+    const jwtSecret = await prisma.configKey.upsert({
+      where: { key: 'JWT_SECRET' },
+      update: {},
+      create: {
+        key: 'JWT_SECRET',
+        description: 'Secret key for JWT token signing',
+        categoryId: securityCategory.id,
+        isSecret: true,
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_EXPIRATION',
+        description: 'Default JWT token expiration time',
+        categoryId: securityCategory.id,
+        defaultValue: '"15m"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    // Platform-specific JWT expirations
+    const jwtWebExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_WEB_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_WEB_EXPIRATION',
+        description: 'JWT token expiration time for web platform',
+        categoryId: securityCategory.id,
+        defaultValue: '"15m"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtWebRefreshExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_WEB_REFRESH_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_WEB_REFRESH_EXPIRATION',
+        description: 'JWT refresh token expiration time for web platform',
+        categoryId: securityCategory.id,
+        defaultValue: '"30d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtAndroidExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_ANDROID_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_ANDROID_EXPIRATION',
+        description: 'JWT token expiration time for Android platform',
+        categoryId: securityCategory.id,
+        defaultValue: '"30d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtAndroidRefreshExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_ANDROID_REFRESH_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_ANDROID_REFRESH_EXPIRATION',
+        description: 'JWT refresh token expiration time for Android platform',
+        categoryId: securityCategory.id,
+        defaultValue: '"180d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtIosExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_IOS_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_IOS_EXPIRATION',
+        description: 'JWT token expiration time for iOS platform',
+        categoryId: securityCategory.id,
+        defaultValue: '"30d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtIosRefreshExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_IOS_REFRESH_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_IOS_REFRESH_EXPIRATION',
+        description: 'JWT refresh token expiration time for iOS platform',
+        categoryId: securityCategory.id,
+        defaultValue: '"180d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtDesktopExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_DESKTOP_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_DESKTOP_EXPIRATION',
+        description: 'JWT token expiration time for desktop platforms',
+        categoryId: securityCategory.id,
+        defaultValue: '"7d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const jwtDesktopRefreshExpiration = await prisma.configKey.upsert({
+      where: { key: 'JWT_DESKTOP_REFRESH_EXPIRATION' },
+      update: {},
+      create: {
+        key: 'JWT_DESKTOP_REFRESH_EXPIRATION',
+        description: 'JWT refresh token expiration time for desktop platforms',
+        categoryId: securityCategory.id,
+        defaultValue: '"60d"',
+        valueType: ValueType.STRING,
+      },
+    });
+
+    // Twilio SMS Configuration
+    const twilioAccountSid = await prisma.configKey.upsert({
+      where: { key: 'TWILIO_ACCOUNT_SID' },
+      update: {},
+      create: {
+        key: 'TWILIO_ACCOUNT_SID',
+        description: 'Twilio account SID for SMS service',
+        categoryId: serviceCategory.id,
+        isSecret: true,
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const twilioAuthToken = await prisma.configKey.upsert({
+      where: { key: 'TWILIO_AUTH_TOKEN' },
+      update: {},
+      create: {
+        key: 'TWILIO_AUTH_TOKEN',
+        description: 'Twilio auth token for SMS service',
+        categoryId: serviceCategory.id,
+        isSecret: true,
+        valueType: ValueType.STRING,
+      },
+    });
+
+    const twilioPhoneNumber = await prisma.configKey.upsert({
+      where: { key: 'TWILIO_PHONE_NUMBER' },
+      update: {},
+      create: {
+        key: 'TWILIO_PHONE_NUMBER',
+        description: 'Twilio phone number for sending SMS',
+        categoryId: serviceCategory.id,
+        valueType: ValueType.STRING,
+      },
+    });
+
+    // Feature Flags
+    const enableSmsNotifications = await prisma.configKey.upsert({
+      where: { key: 'enable-sms-notifications' },
+      update: {},
+      create: {
+        key: 'enable-sms-notifications',
+        description: 'Enable SMS notifications',
+        categoryId: notificationCategory.id,
+        defaultValue: 'true',
+        valueType: ValueType.BOOLEAN,
+      },
+    });
+
+    // Connection Settings
+    const connectionKeepAliveTimeout = await prisma.configKey.upsert({
+      where: { key: 'CONNECTION_KEEP_ALIVE_TIMEOUT' },
+      update: {},
+      create: {
+        key: 'CONNECTION_KEEP_ALIVE_TIMEOUT',
+        description: 'HTTP connection keep-alive timeout in milliseconds',
+        categoryId: networkCategory.id,
+        defaultValue: '60000',
+        valueType: ValueType.NUMBER,
+      },
+    });
+
+    const connectionMaxConnections = await prisma.configKey.upsert({
+      where: { key: 'CONNECTION_MAX_CONNECTIONS' },
+      update: {},
+      create: {
+        key: 'CONNECTION_MAX_CONNECTIONS',
+        description: 'Maximum number of concurrent connections',
+        categoryId: networkCategory.id,
+        defaultValue: '10',
+        valueType: ValueType.NUMBER,
+      },
+    });
+
+    const connectionTimeout = await prisma.configKey.upsert({
+      where: { key: 'CONNECTION_TIMEOUT' },
+      update: {},
+      create: {
+        key: 'CONNECTION_TIMEOUT',
+        description: 'Connection timeout in milliseconds',
+        categoryId: networkCategory.id,
+        defaultValue: '30000',
+        valueType: ValueType.NUMBER,
+      },
+    });
+
+    // ==================== NETWORK CONFIGURATIONS ====================
+    console.log('Creating network configurations...');
+
+    // Development CORS configuration
+    await prisma.networkConfig.upsert({
+      where: {
+        name_environment_platform: {
+          name: 'cors',
+          environment: 'development',
+          platform: PlatformType.ALL,
+        },
+      },
+      update: {},
+      create: {
+        name: 'cors',
+        environment: 'development',
+        platform: PlatformType.ALL,
+        isEnabled: true,
+        config: JSON.stringify({
+          origin: true, // Allow all origins in development
+          methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+          preflightContinue: false,
+          optionsSuccessStatus: 204,
+          credentials: true,
+          allowedHeaders: ['Content-Type', 'Authorization', 'X-Platform', 'X-Device-Id'],
+          exposedHeaders: ['Content-Disposition', 'X-Suggested-Filename'],
+        }),
+      },
+    });
+
+    // Production CORS configuration - Web
+    await prisma.networkConfig.upsert({
+      where: {
+        name_environment_platform: {
+          name: 'cors',
+          environment: 'production',
+          platform: PlatformType.WEB,
+        },
+      },
+      update: {},
+      create: {
+        name: 'cors',
+        environment: 'production',
+        platform: PlatformType.WEB,
+        isEnabled: true,
+        config: JSON.stringify({
+          origin: [
+            'http://localhost:3000',
+            'http://localhost:3001',
+            'https://landsonagri.in',
+            'https://management.landsonagri.in',
+            'https://developer.landsonagri.in',
+          ],
+          methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+          preflightContinue: false,
+          optionsSuccessStatus: 204,
+          credentials: true,
+          allowedHeaders: ['Content-Type', 'Authorization', 'X-Platform', 'X-Device-Id'],
+          exposedHeaders: ['Content-Disposition', 'X-Suggested-Filename'],
+        }),
+      },
+    });
+
+    // Production CORS configuration - Mobile Android
+    await prisma.networkConfig.upsert({
+      where: {
+        name_environment_platform: {
+          name: 'cors',
+          environment: 'production',
+          platform: PlatformType.MOBILE_ANDROID,
+        },
+      },
+      update: {},
+      create: {
+        name: 'cors',
+        environment: 'production',
+        platform: PlatformType.MOBILE_ANDROID,
+        isEnabled: true,
+        config: JSON.stringify({
+          origin: '*', // Mobile apps typically don't need CORS restrictions
+          methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+          preflightContinue: false,
+          optionsSuccessStatus: 204,
+          credentials: true,
+          allowedHeaders: ['Content-Type', 'Authorization', 'X-Platform', 'X-Device-Id'],
+          exposedHeaders: ['Content-Disposition', 'X-Suggested-Filename'],
+        }),
+      },
+    });
+
+    // Same for iOS
+    await prisma.networkConfig.upsert({
+      where: {
+        name_environment_platform: {
+          name: 'cors',
+          environment: 'production',
+          platform: PlatformType.MOBILE_IOS,
+        },
+      },
+      update: {},
+      create: {
+        name: 'cors',
+        environment: 'production',
+        platform: PlatformType.MOBILE_IOS,
+        isEnabled: true,
+        config: JSON.stringify({
+          origin: '*',
+          methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+          preflightContinue: false,
+          optionsSuccessStatus: 204,
+          credentials: true,
+          allowedHeaders: ['Content-Type', 'Authorization', 'X-Platform', 'X-Device-Id'],
+          exposedHeaders: ['Content-Disposition', 'X-Suggested-Filename'],
+        }),
+      },
+    });
+
+    // ==================== RATE LIMITING RULES ====================
+    console.log('Creating rate limiting rules...');
+
+    // Global rate limiting for development (more permissive)
+    await prisma.rateLimitRule.upsert({
+      where: {
+        path_method_environment_platform: {
+          path: '.*',
+          method: '',
+          environment: 'development',
+          platform: PlatformType.ALL,
+        },
+      },
+      update: {},
+      create: {
+        path: '.*',
+        method: '',
+        limit: 1000,
+        windowSec: 60,
+        isEnabled: true,
+        environment: 'development',
+        platform: PlatformType.ALL,
+      },
+    });
+
+    // Global rate limiting for production (stricter)
+    await prisma.rateLimitRule.upsert({
+      where: {
+        path_method_environment_platform: {
+          path: '.*',
+          method: '',
+          environment: 'production',
+          platform: PlatformType.ALL,
+        },
+      },
+      update: {},
+      create: {
+        path: '.*',
+        method: '',
+        limit: 300,
+        windowSec: 60,
+        isEnabled: true,
+        environment: 'production',
+        platform: PlatformType.ALL,
+      },
+    });
+
+    // Stricter rate limiting for auth endpoints
+    await prisma.rateLimitRule.upsert({
+      where: {
+        path_method_environment_platform: {
+          path: '/auth/.*',
+          method: '',
+          environment: 'production',
+          platform: PlatformType.ALL,
+        },
+      },
+      update: {},
+      create: {
+        path: '/auth/.*',
+        method: '',
+        limit: 20,
+        windowSec: 60,
+        isEnabled: true,
+        environment: 'production',
+        platform: PlatformType.ALL,
+      },
+    });
+
+    // Very strict rate limiting for login attempts
+    await prisma.rateLimitRule.upsert({
+      where: {
+        path_method_environment_platform: {
+          path: '/auth/login',
+          method: 'POST',
+          environment: 'production',
+          platform: PlatformType.ALL,
+        },
+      },
+      update: {},
+      create: {
+        path: '/auth/login',
+        method: 'POST',
+        limit: 5,
+        windowSec: 60,
+        isEnabled: true,
+        environment: 'production',
+        platform: PlatformType.ALL,
+      },
+    });
+
+    // ==================== SERVICES ====================
+    console.log('Creating services...');
+
+    // SMS Service
+    const smsService = await prisma.service.upsert({
+      where: { name: 'twilio-sms' },
+      update: {},
+      create: {
+        name: 'twilio-sms',
+        description: 'Twilio SMS service for sending text messages',
+        serviceType: ServiceType.SMS,
+        isEnabled: true,
+      },
+    });
+
+    // Connect SMS service to its required configs
+    await prisma.serviceConfig.upsert({
+      where: { 
+        serviceId_configKeyId: {
+          serviceId: smsService.id,
+          configKeyId: twilioAccountSid.id,
         }
-      });
-      
-      if (!existingRolePermission) {
-        await prisma.rolePermission.create({
-          data: {
-            roleId,
-            permissionId: permission.id
-          }
-        });
-        console.log(`Assigned permission ${permissionName} to role ${roleName}`);
-      }
-    }
+      },
+      update: {},
+      create: {
+        serviceId: smsService.id,
+        configKeyId: twilioAccountSid.id,
+        isRequired: true,
+      },
+    });
+
+    await prisma.serviceConfig.upsert({
+      where: { 
+        serviceId_configKeyId: {
+          serviceId: smsService.id,
+          configKeyId: twilioAuthToken.id,
+        }
+      },
+      update: {},
+      create: {
+        serviceId: smsService.id,
+        configKeyId: twilioAuthToken.id,
+        isRequired: true,
+      },
+    });
+
+    await prisma.serviceConfig.upsert({
+      where: { 
+        serviceId_configKeyId: {
+          serviceId: smsService.id,
+          configKeyId: twilioPhoneNumber.id,
+        }
+      },
+      update: {},
+      create: {
+        serviceId: smsService.id,
+        configKeyId: twilioPhoneNumber.id,
+        isRequired: true,
+      },
+    });
+
+    // ==================== FEATURE FLAGS ====================
+    console.log('Creating feature flags...');
+
+    // SMS notifications feature flag
+    await prisma.featureFlag.upsert({
+      where: {
+        name_environment_platform: {
+          name: 'enable-sms-notifications',
+          environment: '',
+          platform: PlatformType.ALL,
+        },
+      },
+      update: {},
+      create: {
+        name: 'enable-sms-notifications',
+        description: 'Enable SMS notifications',
+        isEnabled: true,
+        environment: '',
+        platform: PlatformType.ALL,
+      },
+    });
+
+    console.log('Database seeding completed successfully');
+  } catch (error) {
+    console.error('Error during seeding operation:', error);
+    throw error;
   }
-}
-
-// Seed categories with hierarchical structure and attributes
-async function seedCategories() {
-  console.log('Seeding categories...');
-  
-  // Create main categories
-  const electronics = await createCategory({
-    name: 'Electronics',
-    description: 'Electronic devices and gadgets',
-    image: 'https://example.com/images/electronics.jpg',
-    metaTitle: 'Electronics - Latest Gadgets and Devices',
-    metaDescription: 'Shop the latest electronic devices, gadgets, and accessories.'
-  });
-  
-  const clothing = await createCategory({
-    name: 'Clothing',
-    description: 'Apparel and fashion items',
-    image: 'https://example.com/images/clothing.jpg',
-    metaTitle: 'Clothing - Fashion & Apparel',
-    metaDescription: 'Discover the latest fashion trends and clothing collections.'
-  });
-  
-  const home = await createCategory({
-    name: 'Home & Garden',
-    description: 'Products for home and garden',
-    image: 'https://example.com/images/home.jpg',
-    metaTitle: 'Home & Garden - Furniture and Decor',
-    metaDescription: 'Find everything you need for your home and garden.'
-  });
-  
-  // Create subcategories for Electronics
-  const smartphones = await createCategory({
-    name: 'Smartphones',
-    description: 'Mobile phones and accessories',
-    parentId: electronics.id,
-    image: 'https://example.com/images/smartphones.jpg',
-    sortOrder: 1,
-    metaTitle: 'Smartphones - Latest Models and Accessories',
-    metaDescription: 'Shop the latest smartphones, cases, and accessories.'
-  });
-  
-  const laptops = await createCategory({
-    name: 'Laptops',
-    description: 'Notebook computers and accessories',
-    parentId: electronics.id,
-    image: 'https://example.com/images/laptops.jpg',
-    sortOrder: 2,
-    metaTitle: 'Laptops - Notebooks and Accessories',
-    metaDescription: 'Find the perfect laptop for work, gaming, or everyday use.'
-  });
-  
-  // Create subcategories for Clothing
-  const mensClothing = await createCategory({
-    name: "Men's Clothing",
-    description: "Clothing items for men",
-    parentId: clothing.id,
-    image: 'https://example.com/images/mens-clothing.jpg',
-    sortOrder: 1,
-    metaTitle: "Men's Clothing - Fashion & Apparel",
-    metaDescription: "Shop the latest men's fashion and clothing collections."
-  });
-  
-  const womensClothing = await createCategory({
-    name: "Women's Clothing",
-    description: "Clothing items for women",
-    parentId: clothing.id,
-    image: 'https://example.com/images/womens-clothing.jpg',
-    sortOrder: 2,
-    metaTitle: "Women's Clothing - Fashion & Apparel",
-    metaDescription: "Discover the latest women's fashion and clothing collections."
-  });
-  
-  // Create subcategories for Home & Garden
-  const furniture = await createCategory({
-    name: 'Furniture',
-    description: 'Home furniture and decor',
-    parentId: home.id,
-    image: 'https://example.com/images/furniture.jpg',
-    sortOrder: 1,
-    metaTitle: 'Furniture - Home Decor and Furnishings',
-    metaDescription: 'Find the perfect furniture for your home.'
-  });
-  
-  const kitchenware = await createCategory({
-    name: 'Kitchenware',
-    description: 'Kitchen appliances and utensils',
-    parentId: home.id,
-    image: 'https://example.com/images/kitchenware.jpg',
-    sortOrder: 2,
-    metaTitle: 'Kitchenware - Appliances and Utensils',
-    metaDescription: 'Discover kitchen appliances, utensils, and accessories.'
-  });
-  
-  const gardening = await createCategory({
-    name: 'Gardening',
-    description: 'Gardening tools and supplies',
-    parentId: home.id,
-    image: 'https://example.com/images/gardening.jpg',
-    sortOrder: 3,
-    metaTitle: 'Gardening - Tools and Supplies',
-    metaDescription: 'Find everything you need for your garden and outdoor spaces.'
-  });
-  
-  // Add attributes to categories
-  
-  // Smartphone attributes
-  await createCategoryAttribute({
-    categoryId: smartphones.id,
-    name: 'Brand',
-    type: AttributeType.DROPDOWN,
-    isRequired: true,
-    options: ['Apple', 'Samsung', 'Google', 'Xiaomi', 'OnePlus', 'Huawei', 'Other'],
-    sortOrder: 1
-  });
-  
-  await createCategoryAttribute({
-    categoryId: smartphones.id,
-    name: 'Storage Capacity',
-    type: AttributeType.DROPDOWN,
-    isRequired: true,
-    options: ['64GB', '128GB', '256GB', '512GB', '1TB'],
-    sortOrder: 2
-  });
-  
-  await createCategoryAttribute({
-    categoryId: smartphones.id,
-    name: 'Color',
-    type: AttributeType.COLOR,
-    isRequired: true,
-    options: ['Black', 'White', 'Blue', 'Red', 'Green', 'Gold', 'Silver'],
-    sortOrder: 3
-  });
-  
-  await createCategoryAttribute({
-    categoryId: smartphones.id,
-    name: 'Features',
-    type: AttributeType.MULTISELECT,
-    options: ['5G', 'Wireless Charging', 'Water Resistant', 'Dual SIM', 'Face Recognition', 'Fingerprint Scanner'],
-    sortOrder: 4
-  });
-  
-  // Laptop attributes
-  await createCategoryAttribute({
-    categoryId: laptops.id,
-    name: 'Brand',
-    type: AttributeType.DROPDOWN,
-    isRequired: true,
-    options: ['Apple', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer', 'Microsoft', 'Other'],
-    sortOrder: 1
-  });
-  
-  await createCategoryAttribute({
-    categoryId: laptops.id,
-    name: 'Processor',
-    type: AttributeType.DROPDOWN,
-    isRequired: true,
-    options: ['Intel Core i3', 'Intel Core i5', 'Intel Core i7', 'Intel Core i9', 'AMD Ryzen 3', 'AMD Ryzen 5', 'AMD Ryzen 7', 'AMD Ryzen 9', 'Apple M1', 'Apple M2', 'Apple M3'],
-    sortOrder: 2
-  });
-  
-  await createCategoryAttribute({
-    categoryId: laptops.id,
-    name: 'RAM',
-    type: AttributeType.DROPDOWN,
-    isRequired: true,
-    options: ['4GB', '8GB', '16GB', '32GB', '64GB'],
-    sortOrder: 3
-  });
-  
-  await createCategoryAttribute({
-    categoryId: laptops.id,
-    name: 'Storage Type',
-    type: AttributeType.DROPDOWN,
-    options: ['SSD', 'HDD', 'Hybrid'],
-    sortOrder: 4
-  });
-  
-  // Clothing attributes
-  const sizeAttribute = {
-    name: 'Size',
-    type: AttributeType.DROPDOWN,
-    isRequired: true,
-    sortOrder: 1
-  };
-  
-  await createCategoryAttribute({
-    categoryId: mensClothing.id,
-    ...sizeAttribute,
-    options: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL']
-  });
-  
-  await createCategoryAttribute({
-    categoryId: womensClothing.id,
-    ...sizeAttribute,
-    options: ['XS', 'S', 'M', 'L', 'XL', 'XXL']
-  });
-  
-  const colorAttribute = {
-    name: 'Color',
-    type: AttributeType.COLOR,
-    isRequired: true,
-    options: ['Black', 'White', 'Blue', 'Red', 'Green', 'Yellow', 'Purple', 'Pink', 'Grey', 'Brown'],
-    sortOrder: 2
-  };
-  
-  await createCategoryAttribute({
-    categoryId: mensClothing.id,
-    ...colorAttribute
-  });
-  
-  await createCategoryAttribute({
-    categoryId: womensClothing.id,
-    ...colorAttribute
-  });
-  
-  // Furniture attributes
-  await createCategoryAttribute({
-    categoryId: furniture.id,
-    name: 'Material',
-    type: AttributeType.DROPDOWN,
-    options: ['Wood', 'Metal', 'Glass', 'Plastic', 'Fabric', 'Leather', 'Composite'],
-    sortOrder: 1
-  });
-  
-  await createCategoryAttribute({
-    categoryId: furniture.id,
-    name: 'Color',
-    type: AttributeType.COLOR,
-    options: ['Black', 'White', 'Brown', 'Grey', 'Beige', 'Blue', 'Green', 'Red'],
-    sortOrder: 2
-  });
-  
-  await createCategoryAttribute({
-    categoryId: furniture.id,
-    name: 'Room',
-    type: AttributeType.DROPDOWN,
-    options: ['Living Room', 'Bedroom', 'Dining Room', 'Office', 'Kitchen', 'Bathroom', 'Outdoor'],
-    sortOrder: 3
-  });
-  
-  // Kitchenware attributes
-  await createCategoryAttribute({
-    categoryId: kitchenware.id,
-    name: 'Material',
-    type: AttributeType.DROPDOWN,
-    options: ['Stainless Steel', 'Glass', 'Plastic', 'Ceramic', 'Wood', 'Silicone', 'Cast Iron'],
-    sortOrder: 1
-  });
-  
-  await createCategoryAttribute({
-    categoryId: kitchenware.id,
-    name: 'Dishwasher Safe',
-    type: AttributeType.BOOLEAN,
-    sortOrder: 2
-  });
-  
-  // Gardening attributes
-  await createCategoryAttribute({
-    categoryId: gardening.id,
-    name: 'Tool Type',
-    type: AttributeType.DROPDOWN,
-    options: ['Hand Tools', 'Power Tools', 'Watering Equipment', 'Planters', 'Fertilizers', 'Seeds', 'Plants'],
-    sortOrder: 1
-  });
-  
-  await createCategoryAttribute({
-    categoryId: gardening.id,
-    name: 'Material',
-    type: AttributeType.DROPDOWN,
-    options: ['Steel', 'Aluminum', 'Wood', 'Plastic', 'Fiberglass', 'Ceramic'],
-    sortOrder: 2
-  });
-  
-  console.log('Categories seeded successfully!');
-}
-
-// Helper function to create a category
-async function createCategory({
-  name,
-  description,
-  parentId = null,
-  image = null,
-  isActive = true,
-  sortOrder = 0,
-  metaTitle = null,
-  metaDescription = null
-}: {
-  name: string;
-  description?: string;
-  parentId?: string | null;
-  image?: string | null;
-  isActive?: boolean;
-  sortOrder?: number;
-  metaTitle?: string | null;
-  metaDescription?: string | null;
-}) {
-  // Generate slug from name
-  const baseSlug = slugify(name, { lower: true });
-  let slug = baseSlug;
-  let counter = 1;
-  
-  // Check if slug already exists and generate a unique one
-  while (await prisma.category.findUnique({ where: { slug } })) {
-    slug = `${baseSlug}-${counter}`;
-    counter++;
-  }
-  
-  const category = await prisma.category.create({
-    data: {
-      name,
-      slug,
-      description,
-      parentId,
-      image,
-      isActive,
-      sortOrder,
-      metaTitle,
-      metaDescription
-    }
-  });
-  
-  console.log(`Created category: ${category.name}`);
-  return category;
-}
-
-// Helper function to create a category attribute
-async function createCategoryAttribute({
-  categoryId,
-  name,
-  type,
-  isRequired = false,
-  options = [],
-  defaultValue = null,
-  sortOrder = 0
-}: {
-  categoryId: string;
-  name: string;
-  type: AttributeType;
-  isRequired?: boolean;
-  options?: string[];
-  defaultValue?: string | null;
-  sortOrder?: number;
-}) {
-  const attribute = await prisma.categoryAttribute.create({
-    data: {
-      categoryId,
-      name,
-      type,
-      isRequired,
-      options,
-      defaultValue,
-      sortOrder
-    }
-  });
-  
-  console.log(`Created attribute: ${attribute.name} for category ID ${categoryId}`);
-  return attribute;
 }
 
 main()
   .catch((e) => {
-    console.error('Error during seeding:', e);
+    console.error('Error during database seeding:', e);
     process.exit(1);
   })
   .finally(async () => {
