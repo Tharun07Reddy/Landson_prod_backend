@@ -404,15 +404,23 @@ export class NetworkService implements OnModuleInit {
         return {
           ...baseConfig,
           origin: [
-            'https://desktop.yourdomain.com',
-            'app://desktop.yourdomain.com',
+            'https://management.landsonagri.in',
+            'https://developer.landsonagri.in',
+            'https://landsonagri.in',
           ],
         };
       default:
         // Default restrictive config for production
         return {
           ...baseConfig,
-          origin: 'https://yourdomain.com',
+          origin: [
+            'https://management.landsonagri.in',
+            'https://developer.landsonagri.in',
+            'https://landsonagri.in',
+            'http://localhost:3000',
+            'http://localhost:3001',
+
+          ],
         };
     }
   }
