@@ -384,9 +384,11 @@ export class NetworkService implements OnModuleInit {
         return {
           ...baseConfig,
           origin: [
-            'https://app.yourdomain.com',
-            'https://admin.yourdomain.com',
-            'https://yourdomain.com',
+            'http://localhost:3000',
+            'http://localhost:3001',
+            'https://management.landsonagri.in',
+            'https://developer.landsonagri.in',
+            'https://landsonagri.in', 
           ],
         };
       case PlatformType.MOBILE_ANDROID:
