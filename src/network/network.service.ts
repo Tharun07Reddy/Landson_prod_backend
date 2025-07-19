@@ -31,15 +31,26 @@ export class NetworkService implements OnModuleInit {
       this.logger.log(`Loading network configurations for environment: ${environment}`);
       
       // Load CORS configurations for all platforms
-      const corsConfigs = await this.prisma.networkConfig.findMany({
+      // First load environment-specific configurations
+      const environmentSpecificConfigs = await this.prisma.networkConfig.findMany({
         where: {
           name: 'cors',
           isEnabled: true,
-          environment: {
-            in: [environment, null] as string[]
-          },
+          environment: environment,
         },
       });
+      
+      // Then load environment-agnostic configurations
+      const generalConfigs = await this.prisma.networkConfig.findMany({
+        where: {
+          name: 'cors',
+          isEnabled: true,
+          environment: null,
+        },
+      });
+      
+      // Combine both sets of configurations, with environment-specific taking precedence
+      const corsConfigs = [...generalConfigs, ...environmentSpecificConfigs];
       
       // Group CORS configs by platform
       for (const platformType of Object.values(PlatformType)) {
@@ -95,19 +106,29 @@ export class NetworkService implements OnModuleInit {
         this.logger.debug('Using fallback default CORS config');
       }
 
-      // Load rate limiting rules
-      const rateLimitRules = await this.prisma.rateLimitRule.findMany({
+      // Load rate limiting rules - using separate queries for environment-specific and general rules
+      const environmentSpecificRules = await this.prisma.rateLimitRule.findMany({
         where: {
           isEnabled: true,
-          OR: [
-            { environment: environment },
-            { environment: null }
-          ]
+          environment: environment
         },
         orderBy: {
           createdAt: 'desc'
         }
       });
+      
+      const generalRules = await this.prisma.rateLimitRule.findMany({
+        where: {
+          isEnabled: true,
+          environment: null
+        },
+        orderBy: {
+          createdAt: 'desc'
+        }
+      });
+      
+      // Combine both sets of rules
+      const rateLimitRules = [...generalRules, ...environmentSpecificRules];
 
       this.logger.log(`Loaded ${rateLimitRules.length} rate limit rules`);
 
@@ -153,6 +174,7 @@ export class NetworkService implements OnModuleInit {
   private async loadConnectionSettings(): Promise<void> {
     try {
       const environment = process.env.NODE_ENV || 'development';
+      this.logger.debug(`Loading connection settings for environment: ${environment}`);
       
       // For each platform, load connection settings
       for (const platformType of [...Object.values(PlatformType), null]) {
@@ -161,45 +183,67 @@ export class NetworkService implements OnModuleInit {
           platform: platformType as PlatformType | null
         };
         
-        const keepAliveTimeout = await this.configService.get<number>(
-          'CONNECTION_KEEP_ALIVE_TIMEOUT', 
-          platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5000 : 60000,
-          true,
-          context 
-        );
+        // Default values based on platform type
+        const defaultKeepAliveTimeout = platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5000 : 60000;
+        const defaultMaxConnections = platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5 : 10;
+        const defaultTimeout = platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 10000 : 30000;
         
-        const maxConnections = await this.configService.get<number>(
-          'CONNECTION_MAX_CONNECTIONS', 
-          platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5 : 10,
-          true,
-          context
-        );
-        
-        const timeout = await this.configService.get<number>(
-          'CONNECTION_TIMEOUT', 
-          platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 10000 : 30000,
-          true,
-          context
-        );
-        
-        this.connectionSettings.set(platformType as PlatformType | null, {
-          keepAliveTimeout,
-          maxConnections,
-          timeout
-        });
+        try {
+          // Try to get platform and environment specific settings
+          const keepAliveTimeout = await this.configService.get<number>(
+            'CONNECTION_KEEP_ALIVE_TIMEOUT', 
+            defaultKeepAliveTimeout,
+            true,
+            context 
+          );
+          
+          const maxConnections = await this.configService.get<number>(
+            'CONNECTION_MAX_CONNECTIONS', 
+            defaultMaxConnections,
+            true,
+            context
+          );
+          
+          const timeout = await this.configService.get<number>(
+            'CONNECTION_TIMEOUT', 
+            defaultTimeout,
+            true,
+            context
+          );
+          
+          this.connectionSettings.set(platformType as PlatformType | null, {
+            keepAliveTimeout,
+            maxConnections,
+            timeout
+          });
+        } catch (error) {
+          this.logger.warn(`Error loading connection settings for platform ${platformType}, using defaults`, error);
+          this.connectionSettings.set(platformType as PlatformType | null, {
+            keepAliveTimeout: defaultKeepAliveTimeout,
+            maxConnections: defaultMaxConnections,
+            timeout: defaultTimeout
+          });
+        }
       }
       
       this.logger.debug('Connection settings loaded successfully');
     } catch (error) {
       this.logger.error('Error loading connection settings', error);
       // Set default connection settings
-      for (const platformType of [...Object.values(PlatformType), null]) {
-        this.connectionSettings.set(platformType as PlatformType | null, {
-          keepAliveTimeout: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5000 : 60000,
-          maxConnections: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5 : 10,
-          timeout: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 10000 : 30000
-        });
-      }
+      this.setDefaultConnectionSettings();
+    }
+  }
+
+  /**
+   * Set default connection settings for all platforms
+   */
+  private setDefaultConnectionSettings(): void {
+    for (const platformType of [...Object.values(PlatformType), null]) {
+      this.connectionSettings.set(platformType as PlatformType | null, {
+        keepAliveTimeout: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5000 : 60000,
+        maxConnections: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5 : 10,
+        timeout: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 10000 : 30000
+      });
     }
   }
 
@@ -230,14 +274,10 @@ export class NetworkService implements OnModuleInit {
     for (const platformType of [...Object.values(PlatformType), null]) {
       this.corsConfigs.set(platformType as PlatformType | null, this.getDefaultCorsConfig(platformType as PlatformType | null));
       this.rateLimitRules.set(platformType as PlatformType | null, []);
-      
-      // Set default connection settings
-      this.connectionSettings.set(platformType as PlatformType | null, {
-        keepAliveTimeout: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5000 : 60000,
-        maxConnections: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 5 : 10,
-        timeout: platformType === PlatformType.MOBILE_ANDROID || platformType === PlatformType.MOBILE_IOS ? 10000 : 30000
-      });
     }
+    
+    // Set default connection settings
+    this.setDefaultConnectionSettings();
     
     this.logger.warn('Using default network configurations');
   }
